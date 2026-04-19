@@ -1,0 +1,42 @@
+extends: base.yaml
+
+metadata:
+  name: dueling-unknown-progress
+  description: Dueling recurrent agent trained when shoe progress is hidden and the episode starts from partially burned shoes.
+
+run:
+  num_envs: 4
+
+start_state:
+  mode: unknown_progress
+  min_burned_rounds: 2
+  max_burned_rounds: 10
+  clear_visible_histories_after_burn: true
+  hide_reshuffle_progress_from_observation: true
+
+environment:
+  observation:
+    profile: table_realistic_unknown_progress
+
+model:
+  architecture: dueling_recurrent
+  encoder_profile: table_realistic_unknown_progress
+  recurrent_type: lstm
+  value_hidden_dim: 128
+  advantage_hidden_dim: 128
+
+training:
+  trainer:
+    total_epochs: 5
+    env_steps_per_epoch: 640
+    train_frequency: 2
+    updates_per_train_step: 1
+    seed: 55
+  replay_buffer:
+    batch_size: 4
+    warmup_size: 16
+    sequence_length: 8
+    min_sequence_length: 2
+  checkpoints:
+    directory: outputs/dueling-unknown-progress
+    periodic_interval_updates: 100

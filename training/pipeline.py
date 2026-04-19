@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field
+import random
+from typing import Any
+
+import torch
+
+from enviroment_bj.core import ACTION_ORDER
+from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN
+
+from .checkpoints import CheckpointManager
+from .config import TrainingPipelineConfig
+from .env_factory import clone_environments, normalize_envs
+from .epsilon import EpsilonScheduler
+from .evaluation import evaluate_policy
+from .logging import TrainingLogger
+from .metrics import BehaviorMetricsTracker, ScalarMetricAccumulator
+from .policy import action_name_from_index, select_epsilon_greedy_action
+from .replay_buffer import FeedForwardReplayBuffer, RecurrentReplayBuffer
+from .step import build_optimizer, build_scheduler, hard_update_target, maybe_update_target, train_gradient_step
+
+
+@dataclass(slots=True)
+class EnvironmentRunnerState:
+    env: Any
+    response: dict[str, Any] | None = None
+    hidden_state: Any = None
+    pending_sequence: list[dict[str, Any]] = field(default_factory=list)
+
+
+class BlackjackRLTrainer:
+    def __init__(
+        self,
+        envs: Any,
+        online_network: Any,
+        *,
+        pipeline_config: TrainingPipelineConfig | None = None,
+        target_network: Any | None = None,
+        optimizer: torch.optim.Optimizer | None = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+    ) -> None:
+        self.pipeline_config = pipeline_config or TrainingPipelineConfig()
+        self.envs = normalize_envs(envs)
+        self.online_network = online_network
+        self.device = self._resolve_device(self.pipeline_config.trainer.device)
+        self.online_network.to(self.device)
+        self.target_network = target_network or deepcopy(online_network)
+        self.target_network.to(self.device)
+        hard_update_target(self.online_network, self.target_network)
+        self.optimizer = optimizer or build_optimizer(self.online_network, self.pipeline_config.optimization)
+        self.scheduler = scheduler or build_scheduler(self.optimizer, self.pipeline_config.optimization)
+        self.epsilon_scheduler = EpsilonScheduler(self.pipeline_config.epsilon)
+        self.rng = random.Random(self.pipeline_config.trainer.seed)
+        self.logger = TrainingLogger(self.pipeline_config.prints)
+        self.checkpoints = CheckpointManager(self.pipeline_config.checkpoints)
+        self.is_recurrent = self.online_network.config.architecture != "feedforward"
+        self.replay_buffer = (
+            RecurrentReplayBuffer(self.pipeline_config.replay_buffer, rng=self.rng)
+            if self.is_recurrent
+            else FeedForwardReplayBuffer(self.pipeline_config.replay_buffer, rng=self.rng)
+        )
+        self.env_states = [EnvironmentRunnerState(env=env) for env in self.envs]
+        self.epoch_index = 0
+        self.env_step_count = 0
+        self.update_count = 0
+        self.best_eval_metrics: dict[str, Any] | None = None
+        self.training_history: list[dict[str, Any]] = []
+        torch.manual_seed(self.pipeline_config.trainer.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.pipeline_config.trainer.seed)
+
+    def _resolve_device(self, device_name: str) -> torch.device:
+        if device_name == "auto":
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device_name == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but is not available")
+        return torch.device(device_name)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "epoch_index": self.epoch_index,
+            "env_step_count": self.env_step_count,
+            "update_count": self.update_count,
+            "epsilon_scheduler": self.epsilon_scheduler.state_dict(),
+            "best_eval_metrics": deepcopy(self.best_eval_metrics),
+            "device": str(self.device),
+        }
+
+    def _buffer_ready(self) -> bool:
+        return len(self.replay_buffer) >= self.pipeline_config.replay_buffer.warmup_size and self.replay_buffer.can_sample()
+
+    def warmup(self) -> dict[str, Any]:
+        tracker = BehaviorMetricsTracker()
+        while len(self.replay_buffer) < self.pipeline_config.replay_buffer.warmup_size:
+            self.collect_experience(num_steps=1, tracker=tracker, epsilon=1.0)
+            self.logger.log_warmup(buffer_size=len(self.replay_buffer), target_size=self.pipeline_config.replay_buffer.warmup_size)
+        return tracker.summary()
+
+    def _temporary_eval_mode(self) -> tuple[bool, bool]:
+        online_was_training = self.online_network.training
+        target_was_training = self.target_network.training
+        self.online_network.eval()
+        self.target_network.eval()
+        return online_was_training, target_was_training
+
+    def _restore_mode(self, online_was_training: bool, target_was_training: bool) -> None:
+        if online_was_training:
+            self.online_network.train()
+        if target_was_training:
+            self.target_network.train()
+
+    def collect_experience(
+        self,
+        *,
+        num_steps: int,
+        tracker: BehaviorMetricsTracker,
+        epsilon: float,
+    ) -> None:
+        online_was_training, target_was_training = self._temporary_eval_mode()
+        try:
+            for _ in range(num_steps):
+                for env_state in self.env_states:
+                    self._ensure_active_response(env_state, tracker)
+
+                    with torch.no_grad():
+                        if self.is_recurrent:
+                            policy_output = self.online_network.forward_step(
+                                env_state.response,
+                                hidden_state=env_state.hidden_state,
+                            )
+                            env_state.hidden_state = policy_output["hidden_state"]
+                            masked_q_values = policy_output["masked_q_values"].squeeze(0)
+                            action_mask = policy_output["action_mask"].squeeze(0)
+                        else:
+                            policy_output = self.online_network(env_state.response)
+                            masked_q_values = policy_output["masked_q_values"].squeeze(0)
+                            action_mask = policy_output["action_mask"].squeeze(0)
+
+                    action_index, was_random = select_epsilon_greedy_action(
+                        masked_q_values=masked_q_values,
+                        action_mask=action_mask,
+                        epsilon=epsilon,
+                        rng=self.rng,
+                    )
+                    action_name = action_name_from_index(action_index, ACTION_ORDER)
+                    try:
+                        next_response = env_state.env.step(action_name)
+                    except RuntimeError as exc:
+                        if "shoe is empty" not in str(exc).lower() and "round is over" not in str(exc).lower():
+                            raise
+                        env_state.response = None
+                        continue
+
+                    table_key = f"{env_state.env.start_state.mode}|{env_state.env.config.observation.profile}"
+                    tracker.record_decision(env_state.response, action_name, was_random=was_random, table_key=table_key)
+                    tracker.record_round_result(next_response)
+                    self.env_step_count += 1
+                    self.epsilon_scheduler.step()
+
+                    transition = {
+                        "state": deepcopy(env_state.response),
+                        "next_state": deepcopy(next_response),
+                        "action": action_index,
+                        "reward": float(next_response["reward"]),
+                        "done": bool(next_response["done"]),
+                        "action_mask": list(env_state.response["action_mask"]),
+                        "next_action_mask": list(next_response["action_mask"]),
+                    }
+
+                    if self.is_recurrent:
+                        env_state.pending_sequence.append(transition)
+                        should_finalize = len(env_state.pending_sequence) >= self.pipeline_config.replay_buffer.sequence_length
+                        if self.pipeline_config.trainer.sequence_end_on_done and next_response["done"]:
+                            should_finalize = True
+                        if should_finalize:
+                            self._commit_pending_sequence(env_state)
+                    else:
+                        self.replay_buffer.add(transition)
+
+                    if next_response["done"]:
+                        env_state.response = None
+                        if self.is_recurrent and self.pipeline_config.trainer.reset_hidden_on_round_end:
+                            env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
+                    else:
+                        env_state.response = next_response
+        finally:
+            self._restore_mode(online_was_training, target_was_training)
+
+    def _ensure_active_response(self, env_state: EnvironmentRunnerState, tracker: BehaviorMetricsTracker) -> None:
+        while env_state.response is None or env_state.response["done"]:
+            if env_state.response is not None and env_state.response["done"]:
+                tracker.record_round_result(env_state.response)
+                if self.is_recurrent and self.pipeline_config.trainer.reset_hidden_on_round_end:
+                    env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
+
+            env_state.response = env_state.env.reset()
+            if self.is_recurrent and env_state.hidden_state is None:
+                env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
+
+    def _commit_pending_sequence(self, env_state: EnvironmentRunnerState) -> None:
+        if not env_state.pending_sequence:
+            return
+        sequence = {
+            key: [step[key] for step in env_state.pending_sequence]
+            for key in ("state", "next_state", "action", "reward", "done", "action_mask", "next_action_mask")
+        }
+        self.replay_buffer.add(sequence)
+        env_state.pending_sequence = []
+
+    def _flush_pending_sequences(self) -> None:
+        if not self.is_recurrent or not self.pipeline_config.trainer.flush_partial_sequences_at_epoch_end:
+            return
+        for env_state in self.env_states:
+            self._commit_pending_sequence(env_state)
+
+    def train_step(self) -> dict[str, Any]:
+        batch = self.replay_buffer.sample()
+        result = train_gradient_step(
+            online_network=self.online_network,
+            target_network=self.target_network,
+            optimizer=self.optimizer,
+            batch=batch,
+            loss_config=self.pipeline_config.trainer.loss,
+            optimization_config=self.pipeline_config.optimization,
+            scheduler=self.scheduler,
+        )
+        self.update_count += 1
+        target_synced = maybe_update_target(
+            self.online_network,
+            self.target_network,
+            self.update_count,
+            self.pipeline_config.target_update,
+        )
+        metrics = dict(result["metrics"])
+        metrics.update(
+            {
+                "buffer_size": float(len(self.replay_buffer)),
+                "epsilon": self.epsilon_scheduler.value(),
+                "target_synced": float(target_synced),
+            }
+        )
+        result["metrics"] = metrics
+        return result
+
+    def evaluate(self) -> dict[str, Any]:
+        eval_envs = clone_environments(self.envs, seed_offset=self.pipeline_config.trainer.seed + 100_000)
+        return evaluate_policy(
+            envs=eval_envs,
+            model=self.online_network,
+            epsilon=self.pipeline_config.epsilon.evaluation_epsilon,
+            num_rounds=self.pipeline_config.evaluation.num_rounds,
+            max_decisions=self.pipeline_config.evaluation.max_decisions,
+            rng=random.Random(self.pipeline_config.trainer.seed + self.epoch_index),
+            reset_hidden_on_round_end=self.pipeline_config.trainer.reset_hidden_on_round_end,
+        )
+
+    def train_one_epoch(self) -> dict[str, Any]:
+        self.epoch_index += 1
+        if not self._buffer_ready():
+            self.warmup()
+
+        behavior_tracker = BehaviorMetricsTracker()
+        optimization_tracker = ScalarMetricAccumulator()
+        updates_this_epoch = 0
+
+        for step_in_epoch in range(1, self.pipeline_config.trainer.env_steps_per_epoch + 1):
+            self.collect_experience(num_steps=1, tracker=behavior_tracker, epsilon=self.epsilon_scheduler.value())
+            self.logger.log_collection(
+                epoch=self.epoch_index,
+                env_steps=self.env_step_count,
+                metrics=behavior_tracker.summary(),
+            )
+
+            should_train = self._buffer_ready() and (self.env_step_count % self.pipeline_config.trainer.train_frequency == 0)
+            if should_train:
+                for _ in range(self.pipeline_config.trainer.updates_per_train_step):
+                    if (
+                        self.pipeline_config.trainer.max_updates_per_epoch is not None
+                        and updates_this_epoch >= self.pipeline_config.trainer.max_updates_per_epoch
+                    ):
+                        break
+                    train_result = self.train_step()
+                    updates_this_epoch += 1
+                    optimization_tracker.update(train_result["metrics"])
+                    self.logger.log_update(
+                        epoch=self.epoch_index,
+                        env_steps=self.env_step_count,
+                        update=self.update_count,
+                        metrics=train_result["metrics"],
+                    )
+
+                    if (
+                        self.pipeline_config.checkpoints.save_periodic
+                        and self.update_count % self.pipeline_config.checkpoints.periodic_interval_updates == 0
+                    ):
+                        path = self.checkpoints.save_periodic(self, metrics=train_result["metrics"])
+                        if path is not None:
+                            self.logger.log_checkpoint(kind="periodic", path=str(path))
+
+        self._flush_pending_sequences()
+
+        train_metrics = behavior_tracker.summary()
+        optimization_metrics = optimization_tracker.summary()
+        epoch_summary = {
+            **train_metrics,
+            **optimization_metrics,
+            "epoch": float(self.epoch_index),
+            "env_steps": float(self.env_step_count),
+            "updates": float(self.update_count),
+            "updates_this_epoch": float(updates_this_epoch),
+            "buffer_size": float(len(self.replay_buffer)),
+            "epsilon": self.epsilon_scheduler.value(),
+            "learning_rate": float(self.optimizer.param_groups[0]["lr"]),
+        }
+
+        eval_metrics: dict[str, Any] | None = None
+        if self.pipeline_config.evaluation.enabled and self.epoch_index % self.pipeline_config.evaluation.every_n_epochs == 0:
+            eval_metrics = self.evaluate()
+            self.logger.log_evaluation(epoch=self.epoch_index, metrics=eval_metrics)
+            best_path = self.checkpoints.save_best(self, metrics=eval_metrics)
+            if best_path is not None:
+                self.best_eval_metrics = dict(eval_metrics)
+                self.logger.log_checkpoint(kind="best_eval", path=str(best_path))
+
+        latest_path = self.checkpoints.save_latest(self, metrics=eval_metrics or epoch_summary)
+        if latest_path is not None:
+            self.logger.log_checkpoint(kind="latest", path=str(latest_path))
+
+        final_summary = {
+            **epoch_summary,
+            "eval": eval_metrics,
+        }
+        self.training_history.append(final_summary)
+        self.logger.log_epoch_summary(epoch=self.epoch_index, summary=epoch_summary)
+        return final_summary
+
+    def train(self) -> dict[str, Any]:
+        history: list[dict[str, Any]] = []
+        for _ in range(self.pipeline_config.trainer.total_epochs):
+            history.append(self.train_one_epoch())
+        return {
+            "history": history,
+            "best_eval_metrics": deepcopy(self.best_eval_metrics),
+            "state": self.state_dict(),
+            "checkpoint_dir": str(self.pipeline_config.checkpoints.directory_path),
+        }
+
+
+def _ensure_supported_model(model: Any) -> None:
+    if not isinstance(model, (FeedForwardDoubleDQN, RecurrentDoubleDQN, DuelingRecurrentDoubleDQN)):
+        raise TypeError("Unsupported model type for BlackjackRLTrainer")
+
+
+def build_trainer(
+    envs: Any,
+    model: Any,
+    *,
+    pipeline_config: TrainingPipelineConfig | None = None,
+    target_network: Any | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+) -> BlackjackRLTrainer:
+    _ensure_supported_model(model)
+    return BlackjackRLTrainer(
+        envs,
+        model,
+        pipeline_config=pipeline_config,
+        target_network=target_network,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )

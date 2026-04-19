@@ -1,0 +1,108 @@
+metadata:
+  name: base
+  description: Shared defaults for reproducible blackjack RL experiments.
+
+run:
+  num_envs: 4
+
+start_state:
+  mode: fresh_shoe
+  min_burned_rounds: 0
+  max_burned_rounds: 0
+  clear_visible_histories_after_burn: true
+  hide_reshuffle_progress_from_observation: false
+
+environment:
+  n_decks: 6
+  shoe_penetration: 0.8
+  dealer_hits_soft_17: false
+  blackjack_payout: 1.5
+  dealer_peeks_for_blackjack: true
+  double_allowed_on: any_two_cards
+  double_after_split_allowed: true
+  split_rule: same_value
+  max_hands_after_split: 4
+  resplit_aces_allowed: true
+  hit_split_aces_allowed: false
+  surrender_allowed: true
+  insurance_allowed: true
+  base_bet: 1.0
+  strict_shoe_validation: false
+  expose_shoe_composition: false
+  observation:
+    profile: table_realistic_default
+
+model:
+  architecture: recurrent
+  encoder_profile: table_realistic_default
+  activation: relu
+  use_layer_norm: true
+  dropout: 0.0
+  projection_dim: 256
+  recurrent_hidden_dim: 256
+  recurrent_num_layers: 1
+  recurrent_type: gru
+  head_hidden_dim: 128
+
+training:
+  trainer:
+    total_epochs: 3
+    env_steps_per_epoch: 256
+    train_frequency: 4
+    updates_per_train_step: 1
+    max_updates_per_epoch: null
+    device: auto
+    seed: 7
+    reset_hidden_on_round_end: false
+    sequence_end_on_done: false
+    flush_partial_sequences_at_epoch_end: true
+    loss:
+      gamma: 0.99
+      loss_type: huber
+      validate_current_actions: true
+      validate_next_action_mask: true
+      allow_terminal_without_legal_next_action: true
+  replay_buffer:
+    capacity: 50000
+    batch_size: 64
+    warmup_size: 1000
+    sequence_length: 8
+    min_sequence_length: 2
+  epsilon:
+    start: 1.0
+    end: 0.05
+    decay_steps: 25000
+    evaluation_epsilon: 0.0
+  optimization:
+    optimizer: adam
+    learning_rate: 0.001
+    weight_decay: 0.0
+    scheduler: none
+    scheduler_step_size: 1000
+    scheduler_gamma: 0.99
+    gradient_clipping: true
+    max_grad_norm: 5.0
+  target_update:
+    mode: hard
+    hard_update_interval: 250
+    soft_tau: 0.005
+  evaluation:
+    enabled: true
+    every_n_epochs: 1
+    num_rounds: 100
+    max_decisions: 5000
+  checkpoints:
+    directory: outputs/base
+    save_latest: true
+    save_best_eval: true
+    save_periodic: true
+    periodic_interval_updates: 500
+    best_metric_name: ev_per_1000_hands
+    maximize_best_metric: true
+  prints:
+    enable: true
+    print_update_interval: 50
+    print_collection_interval: 100
+    print_epoch_summary: true
+    print_eval_summary: true
+    include_segment_details: false

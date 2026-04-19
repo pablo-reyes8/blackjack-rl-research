@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from time import perf_counter
+from typing import Any
+
+import torch
+from torch import nn
+
+from loss import compute_td_loss
+
+from .config import OptimizationConfig, TargetUpdateConfig
+
+
+def build_optimizer(model: nn.Module, config: OptimizationConfig) -> torch.optim.Optimizer:
+    optimizer_cls = torch.optim.Adam if config.optimizer == "adam" else torch.optim.AdamW
+    return optimizer_cls(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    config: OptimizationConfig,
+) -> torch.optim.lr_scheduler._LRScheduler | None:
+    if config.scheduler == "none":
+        return None
+    return torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=config.scheduler_step_size,
+        gamma=config.scheduler_gamma,
+    )
+
+
+def compute_gradient_norm(parameters: Any) -> float:
+    total = 0.0
+    for parameter in parameters:
+        if parameter.grad is None:
+            continue
+        grad_norm = parameter.grad.detach().data.norm(2).item()
+        total += grad_norm * grad_norm
+    return total ** 0.5
+
+
+def hard_update_target(online_network: nn.Module, target_network: nn.Module) -> None:
+    target_network.load_state_dict(online_network.state_dict())
+
+
+def soft_update_target(online_network: nn.Module, target_network: nn.Module, tau: float) -> None:
+    with torch.no_grad():
+        for target_parameter, online_parameter in zip(target_network.parameters(), online_network.parameters()):
+            target_parameter.data.mul_(1.0 - tau)
+            target_parameter.data.add_(tau * online_parameter.data)
+
+
+def maybe_update_target(
+    online_network: nn.Module,
+    target_network: nn.Module,
+    update_count: int,
+    config: TargetUpdateConfig,
+) -> bool:
+    if config.mode == "soft":
+        soft_update_target(online_network, target_network, config.soft_tau)
+        return True
+    if update_count % config.hard_update_interval == 0:
+        hard_update_target(online_network, target_network)
+        return True
+    return False
+
+
+def train_gradient_step(
+    *,
+    online_network: nn.Module,
+    target_network: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    batch: dict[str, Any],
+    loss_config: Any,
+    optimization_config: OptimizationConfig,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+) -> dict[str, Any]:
+    start_time = perf_counter()
+    online_network.train()
+    target_network.eval()
+
+    optimizer.zero_grad(set_to_none=True)
+    loss_info = compute_td_loss(
+        online_network,
+        target_network,
+        batch,
+        gamma=loss_config.gamma,
+        loss_type=loss_config.loss_type,
+        config=loss_config,
+    )
+    loss_info["loss"].backward()
+
+    if optimization_config.gradient_clipping:
+        grad_norm = float(
+            torch.nn.utils.clip_grad_norm_(online_network.parameters(), optimization_config.max_grad_norm).item()
+        )
+    else:
+        grad_norm = float(compute_gradient_norm(online_network.parameters()))
+
+    optimizer.step()
+    if scheduler is not None:
+        scheduler.step()
+
+    elapsed = perf_counter() - start_time
+    learning_rate = float(optimizer.param_groups[0]["lr"])
+    metrics = dict(loss_info["metrics"])
+    metrics.update(
+        {
+            "grad_norm": grad_norm,
+            "learning_rate": learning_rate,
+            "update_time_sec": elapsed,
+        }
+    )
+
+    return {
+        **loss_info,
+        "metrics": metrics,
+    }

@@ -1,0 +1,33 @@
+extends: base.yaml
+
+metadata:
+  name: recurrent-table-default
+  description: Recurrent Double DQN for partially observable table play with visible history and discard summaries.
+
+run:
+  num_envs: 4
+
+environment:
+  observation:
+    profile: table_realistic_default
+
+model:
+  architecture: recurrent
+  encoder_profile: table_realistic_default
+  recurrent_type: gru
+
+training:
+  trainer:
+    total_epochs: 5
+    env_steps_per_epoch: 640
+    train_frequency: 2
+    updates_per_train_step: 1
+    seed: 34
+  replay_buffer:
+    batch_size: 4
+    warmup_size: 16
+    sequence_length: 8
+    min_sequence_length: 2
+  checkpoints:
+    directory: outputs/recurrent-table-default
+    periodic_interval_updates: 100

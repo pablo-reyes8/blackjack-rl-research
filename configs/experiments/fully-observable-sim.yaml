@@ -1,0 +1,34 @@
+extends: base.yaml
+
+metadata:
+  name: fully-observable-sim
+  description: Research preset that exposes simulator-level shoe composition and broader action-context history.
+
+run:
+  num_envs: 4
+
+environment:
+  expose_shoe_composition: true
+  observation:
+    profile: fully_observable_sim
+
+model:
+  architecture: dueling_recurrent
+  encoder_profile: fully_observable_sim
+  recurrent_type: gru
+
+training:
+  trainer:
+    total_epochs: 5
+    env_steps_per_epoch: 640
+    train_frequency: 2
+    updates_per_train_step: 1
+    seed: 89
+  replay_buffer:
+    batch_size: 4
+    warmup_size: 16
+    sequence_length: 8
+    min_sequence_length: 2
+  checkpoints:
+    directory: outputs/fully-observable-sim
+    periodic_interval_updates: 100

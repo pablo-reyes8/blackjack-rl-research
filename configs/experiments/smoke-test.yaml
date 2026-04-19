@@ -1,0 +1,59 @@
+extends: base.yaml
+
+metadata:
+  name: smoke-test
+  description: Fast end-to-end sanity check for CI and local validation.
+
+run:
+  num_envs: 1
+
+environment:
+  n_decks: 1
+  shoe_penetration: 1.0
+  observation:
+    profile: minimal_basic_strategy
+
+model:
+  architecture: feedforward
+  encoder_profile: minimal_basic_strategy
+  activation: relu
+  use_layer_norm: false
+  dropout: 0.0
+  feedforward_hidden_dims: [128, 128]
+
+training:
+  trainer:
+    total_epochs: 1
+    env_steps_per_epoch: 18
+    train_frequency: 1
+    updates_per_train_step: 1
+    max_updates_per_epoch: 4
+    device: cpu
+    seed: 13
+    reset_hidden_on_round_end: false
+    sequence_end_on_done: false
+    flush_partial_sequences_at_epoch_end: true
+  replay_buffer:
+    capacity: 256
+    batch_size: 4
+    warmup_size: 8
+    sequence_length: 8
+    min_sequence_length: 2
+  epsilon:
+    start: 0.8
+    end: 0.1
+    decay_steps: 50
+    evaluation_epsilon: 0.0
+  evaluation:
+    enabled: true
+    every_n_epochs: 1
+    num_rounds: 4
+    max_decisions: 200
+  checkpoints:
+    directory: outputs/smoke-test
+    save_latest: true
+    save_best_eval: true
+    save_periodic: true
+    periodic_interval_updates: 2
+  prints:
+    enable: false

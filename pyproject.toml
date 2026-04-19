@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blackjack-rl-research"
+version = "0.1.0"
+description = "Advanced reinforcement learning research environment and training pipeline for blackjack."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Blackjack RL contributors" }
+]
+keywords = ["reinforcement-learning", "blackjack", "deep-learning", "dqn", "pytorch"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "PyYAML>=6.0,<7.0",
+  "torch>=2.3,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "ipykernel>=6.29",
+  "jupyterlab>=4.2",
+  "notebook>=7.2",
+]
+
+[project.scripts]
+blackjack-train = "blackjack_rl_cli.train:main"
+blackjack-evaluate = "blackjack_rl_cli.evaluate:main"
+blackjack-describe = "blackjack_rl_cli.describe_setup:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["blackjack_rl_cli*", "enviroment_bj*", "loss*", "model*", "training*"]
+exclude = ["tests*", "notebooks*", "change_logs*"]

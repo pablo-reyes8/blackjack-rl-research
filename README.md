@@ -1,0 +1,386 @@
+# Blackjack RL
+
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![PyTorch](https://img.shields.io/badge/framework-PyTorch-red)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-research%20prototype-orange)
+
+Advanced reinforcement learning research environment for blackjack with partial observability, configurable table rules, recurrent agents, checkpointed training, and reproducible experiment presets.
+
+This is not a toy "learn one round" blackjack project. The codebase already models hidden shoe state, reshuffle dynamics, variable observation profiles, replay buffers for recurrent training, and multiple Double DQN variants.
+
+## Table of Contents
+
+- [Why this repository stands out](#why-this-repository-stands-out)
+- [Current status](#current-status)
+- [Repository layout](#repository-layout)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Experiment presets](#experiment-presets)
+- [CLI workflows](#cli-workflows)
+- [Python API](#python-api)
+- [Notebook workflow](#notebook-workflow)
+- [Configuration system](#configuration-system)
+- [Checkpoints and outputs](#checkpoints-and-outputs)
+- [Docker](#docker)
+- [Testing and CI](#testing-and-ci)
+- [Engineering practices](#engineering-practices)
+- [Limitations and next steps](#limitations-and-next-steps)
+- [License](#license)
+
+## Why this repository stands out
+
+- Blackjack is treated as a sequential decision-making problem under uncertainty, not as a single isolated hand.
+- The environment supports realistic rules such as splits, doubles, surrender, insurance, multi-deck shoes, dealer peek behavior, and reshuffle logic.
+- Observation design is part of the research surface: from compact basic-strategy-style inputs to simulator-level fully observable settings.
+- The project already includes feedforward, recurrent, and dueling recurrent Double DQN agents.
+- The training stack includes evaluation, replay buffers, epsilon scheduling, target-network updates, and checkpoint management.
+- The repository is now packaged for a clean first public push: `README`, `pyproject.toml`, Docker, GitHub Actions, YAML presets, requirements files, scripts, license, and repo hygiene files.
+
+## Current status
+
+- Core environment implementation is present and covered by unit tests.
+- Encoder profiles are implemented for multiple observability regimes.
+- Agent architectures available today:
+
+| Architecture | Intended use |
+| --- | --- |
+| `feedforward` | Compact state, faster smoke runs, low-memory baselines |
+| `recurrent` | Partial observability with temporal credit assignment |
+| `dueling_recurrent` | Stronger sequence model for richer or harder table settings |
+
+- Observation and encoder profiles available today:
+
+| Profile | Description |
+| --- | --- |
+| `minimal_basic_strategy` | Minimal state close to hand/rule features |
+| `table_realistic_default` | Partial observability with realistic visible context |
+| `table_realistic_unknown_progress` | Hidden shoe progress and stronger uncertainty |
+| `fully_observable_sim` | Research-only simulator view with exact shoe information |
+
+
+
+## Repository layout
+
+```text
+blackjack-rl/
+├── configs/experiments/        # YAML presets for reproducible runs
+├── enviroment_bj/              # Blackjack environment, wrapper, text game, rules
+├── loss/                       # Bellman target and TD loss implementations
+├── model/                      # Encoders and Q-network agents
+├── notebooks/                  # Interactive exploration notebooks
+├── scripts/                    # Final CLIs for describe/train/evaluate workflows
+├── tests/                      # Unit and smoke tests
+├── training/                   # Replay buffers, evaluation, trainer, checkpoints
+├── .github/workflows/ci.yml    # GitHub Actions CI
+├── Dockerfile                  # CPU-friendly container image
+├── pyproject.toml              # Packaging and console entry points
+└── README.md
+```
+
+## Installation
+
+### Option 1: standard local setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements-dev.txt
+pip install -e .
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements-dev.txt
+pip install -e .
+```
+
+### Option 2: minimal runtime dependencies only
+
+```bash
+pip install -r requirements.txt
+```
+
+## Quick start
+
+### 1. Inspect a preset before training
+
+```bash
+blackjack-describe --experiment-config configs/experiments/smoke-test.yaml
+```
+
+If you prefer direct script execution instead of installed console commands:
+
+```bash
+python scripts/describe_setup.py --experiment-config configs/experiments/smoke-test.yaml
+```
+
+### 2. Run a smoke training job
+
+```bash
+blackjack-train --experiment-config configs/experiments/smoke-test.yaml
+```
+
+This preset is intentionally small and is used by CI as a fast end-to-end validation run.
+
+### 3. Evaluate a checkpoint
+
+```bash
+blackjack-evaluate \
+  --experiment-config configs/experiments/smoke-test.yaml \
+  --checkpoint outputs/smoke-test/latest.pt
+```
+
+## Experiment presets
+
+The repository ships with a small but useful preset catalog.
+
+| Preset | Main idea |
+| --- | --- |
+| `configs/experiments/smoke-test.yaml` | Fast CI and local sanity check |
+| `configs/experiments/feedforward-basic.yaml` | Feedforward baseline on compact observations |
+| `configs/experiments/recurrent-table-default.yaml` | GRU-based recurrent training on realistic table observations |
+| `configs/experiments/dueling-unknown-progress.yaml` | LSTM dueling recurrent agent under hidden shoe progress |
+| `configs/experiments/fully-observable-sim.yaml` | Stronger research preset using simulator-level visibility |
+| `configs/experiments/experiment.template.yaml` | Copyable template for custom experiments |
+
+## CLI workflows
+
+### Describe a setup
+
+Use this to inspect the fully resolved environment, model, and training config before spending time on a run.
+
+```bash
+blackjack-describe --experiment-config configs/experiments/recurrent-table-default.yaml
+```
+
+### Train with a preset
+
+```bash
+blackjack-train --experiment-config configs/experiments/feedforward-basic.yaml
+```
+
+### Override the number of environments or the output directory
+
+```bash
+blackjack-train \
+  --experiment-config configs/experiments/recurrent-table-default.yaml \
+  --num-envs 8 \
+  --output-dir outputs/recurrent-table-default-x8
+```
+
+### Dry-run a config without training
+
+```bash
+blackjack-train \
+  --experiment-config configs/experiments/dueling-unknown-progress.yaml \
+  --print-config \
+  --dry-run
+```
+
+### Evaluate a saved checkpoint with custom evaluation settings
+
+```bash
+blackjack-evaluate \
+  --experiment-config configs/experiments/fully-observable-sim.yaml \
+  --checkpoint outputs/fully-observable-sim/latest.pt \
+  --num-rounds 500 \
+  --max-decisions 20000 \
+  --device auto
+```
+
+## Python API
+
+You can use the project directly from Python without going through the CLIs.
+
+```python
+from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConfig, StartStateConfig
+from model.agents import RecurrentDoubleDQN
+from training import TrainingPipelineConfig, train_model
+
+observation = ObservationConfig.for_profile("table_realistic_default")
+environment = BlackjackEnvironment(
+    config=BlackjackConfig(
+        n_decks=6,
+        shoe_penetration=0.8,
+        observation=observation,
+    ),
+    seed=7,
+    start_state=StartStateConfig(mode="fresh_shoe"),
+)
+
+model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")
+pipeline_config = TrainingPipelineConfig()
+
+result = train_model(environment, model, pipeline_config=pipeline_config)
+print(result["checkpoint_dir"])
+```
+
+### Example: environment-only interaction
+
+```python
+from enviroment_bj import BlackjackJSONWrapper
+
+game = BlackjackJSONWrapper(seed=7)
+response = game.reset()
+
+while not response["done"]:
+    action = response["legal_actions"][0]
+    response = game.step({"action": action})
+```
+
+## Notebook workflow
+
+The repository already includes exploratory notebooks under `notebooks/`.
+
+| Notebook | Typical use |
+| --- | --- |
+| `try_blackjack.ipynb` | Inspect environment behavior |
+| `try_encoder.ipynb` | Inspect observation encoding and state vectors |
+| `try_agents.ipynb` | Test model outputs and architecture behavior |
+| `try_training.ipynb` | Experiment with the training loop interactively |
+| `pipeline_settings.ipynb` | Explore pipeline settings and variants |
+
+Recommended notebook setup:
+
+```bash
+pip install -r requirements-dev.txt
+pip install -e .
+jupyter lab
+```
+
+## Configuration system
+
+Experiment presets live in `configs/experiments/` and are YAML-based.
+
+Each experiment can define:
+
+- `metadata`: human-readable name and description
+- `run`: script-level settings such as `num_envs`
+- `start_state`: how episodes start, including hidden burned rounds
+- `environment`: full blackjack rules and observation profile
+- `model`: agent architecture and network hyperparameters
+- `training`: replay buffer, optimization, epsilon schedule, evaluation, checkpointing, and print settings
+
+The config loader supports inheritance through `extends`, so presets can share a common base while overriding only what changes.
+
+Example excerpt:
+
+```yaml
+extends: base.yaml
+
+metadata:
+  name: recurrent-table-default
+
+run:
+  num_envs: 4
+
+environment:
+  observation:
+    profile: table_realistic_default
+
+model:
+  architecture: recurrent
+  encoder_profile: table_realistic_default
+  recurrent_type: gru
+```
+
+## Checkpoints and outputs
+
+Training writes checkpoints to the directory defined in `training.checkpoints.directory`.
+
+Typical files:
+
+- `latest.pt`: most recent checkpoint
+- `best_eval.pt`: best checkpoint according to the configured evaluation metric
+- `step_XXXXXXXX.pt`: periodic snapshots when enabled
+- `run_summary.json`: JSON summary produced by the training CLI
+
+Checkpoint payloads include:
+
+- model weights
+- optimizer state
+- scheduler state when present
+- serialized model config
+- serialized pipeline config
+- trainer state and metrics
+
+## Docker
+
+Build the image:
+
+```bash
+docker build -t blackjack-rl .
+```
+
+Run the default smoke training job:
+
+```bash
+docker run --rm blackjack-rl
+```
+
+Run a different preset by overriding the command:
+
+```bash
+docker run --rm blackjack-rl \
+  blackjack-train --experiment-config configs/experiments/feedforward-basic.yaml
+```
+
+## Testing and CI
+
+Run the test suite locally:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+GitHub Actions is configured in `.github/workflows/ci.yml` and currently does the following:
+
+- installs dependencies
+- installs the package in editable mode
+- runs the full test suite
+- resolves the smoke preset with the describe CLI
+- runs a smoke training job through the final training CLI
+
+Dependabot is also configured for both Python dependencies and GitHub Actions updates.
+
+## Engineering practices
+
+This repository now includes the baseline pieces expected from a serious public ML repo:
+
+- `pyproject.toml` for packaging and console entry points
+- `requirements.txt` and `requirements-dev.txt`
+- Docker support
+- GitHub Actions CI
+- YAML experiment presets with inheritance
+- MIT license
+- `.gitignore`, `.dockerignore`, and `.editorconfig`
+- contributor guidance in `CONTRIBUTING.md`
+
+## Limitations and next steps
+
+What is already strong:
+
+- environment fidelity and rule configurability
+- encoder flexibility
+- recurrent RL training pipeline
+- reproducible preset-driven workflows
+
+What is still missing or intentionally left lightweight:
+
+- no published benchmark table yet
+- no experiment tracking backend integration
+- no hyperparameter sweep orchestration
+- no pre-trained model zoo
+- no distributed or multi-node training support
+
+If this becomes a public research repo with active iteration, the next natural additions would be benchmark reports, release notes, experiment tracking, and curated result cards.
+
+## License
+
+This project is released under the MIT License. See `LICENSE` for details.
