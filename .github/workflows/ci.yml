@@ -2,11 +2,54 @@ name: CI
 
 on:
   push:
+    paths-ignore:
+      - "README.md"
+      - "LICENSE"
+      - "CONTRIBUTING.md"
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "LICENSE"
+      - "CONTRIBUTING.md"
   workflow_dispatch:
 
 jobs:
-  test:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      basic: ${{ steps.filter.outputs.basic }}
+      rl_core: ${{ steps.filter.outputs.rl_core }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            basic:
+              - '.github/workflows/ci.yml'
+              - 'enviroment_bj/**'
+              - 'blackjack_rl_cli/**'
+              - 'scripts/**'
+              - 'configs/**'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+              - 'Dockerfile'
+              - 'tests/test_blackjack_environment.py'
+              - 'tests/test_blackjack_encoder.py'
+              - 'tests/test_blackjack_agents.py'
+            rl_core:
+              - 'loss/**'
+              - 'model/**'
+              - 'training/**'
+              - 'tests/test_blackjack_loss.py'
+
+  basic-tests:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.basic == 'true' || needs.detect-changes.outputs.rl_core == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -36,11 +79,45 @@ jobs:
           pip install -r requirements-dev.txt
           pip install -e .
 
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Run foundational test suite
+        run: |
+          python -m unittest tests.test_blackjack_environment
+          python -m unittest tests.test_blackjack_encoder
+          python -m unittest tests.test_blackjack_agents
 
       - name: Resolve smoke preset
         run: python scripts/describe_setup.py --experiment-config configs/experiments/smoke-test.yaml --summary-path outputs/ci/describe.json
+
+  rl-pipeline-smoke:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.rl_core == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-3.11-${{ hashFiles('pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-3.11-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run RL core loss tests
+        run: python -m unittest tests.test_blackjack_loss
 
       - name: Run smoke training CLI
         run: python scripts/train.py --experiment-config configs/experiments/smoke-test.yaml --summary-path outputs/ci/train-summary.json

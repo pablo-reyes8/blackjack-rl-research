@@ -9,6 +9,9 @@ Advanced reinforcement learning research environment for blackjack with partial 
 
 This is not a toy "learn one round" blackjack project. The codebase already models hidden shoe state, reshuffle dynamics, variable observation profiles, replay buffers for recurrent training, and multiple Double DQN variants.
 
+The stack is intentionally built without Gymnasium or other RL framework abstractions. Environment dynamics, observation encoding, replay buffers, training loops, evaluation, checkpointing, and agent implementations are developed in pure PyTorch and native Python to keep the full decision pipeline transparent, customizable, and research-friendly.
+
+
 ## Table of Contents
 
 - [Why this repository stands out](#why-this-repository-stands-out)

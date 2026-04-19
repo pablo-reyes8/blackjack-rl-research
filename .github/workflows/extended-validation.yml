@@ -1,0 +1,41 @@
+name: Extended Validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+
+concurrency:
+  group: extended-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  heavy-training-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-extended-3.11-${{ hashFiles('pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-extended-3.11-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run heavy training tests
+        run: python -m unittest tests.test_blackjack_training
