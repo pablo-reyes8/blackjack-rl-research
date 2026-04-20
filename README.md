@@ -21,6 +21,7 @@ The stack is intentionally built without Gymnasium or other RL framework abstrac
 - [Quick start](#quick-start)
 - [Experiment presets](#experiment-presets)
 - [CLI workflows](#cli-workflows)
+- [Ablation CLIs](#ablation-clis)
 - [Python API](#python-api)
 - [Notebook workflow](#notebook-workflow)
 - [Configuration system](#configuration-system)
@@ -73,6 +74,7 @@ blackjack-rl/
 ├── model/                      # Encoders and Q-network agents
 ├── notebooks/                  # Interactive exploration notebooks
 ├── scripts/                    # Final CLIs for describe/train/evaluate workflows
+├── scripts/ablations/          # Self-contained ablation runners and comparison tools
 ├── tests/                      # Unit and smoke tests
 ├── training/                   # Replay buffers, evaluation, trainer, checkpoints
 ├── .github/workflows/ci.yml    # GitHub Actions CI
@@ -197,6 +199,7 @@ blackjack-evaluate \
   --device auto
 ```
 
+
 ## Python API
 
 You can use the project directly from Python without going through the CLIs.
@@ -235,6 +238,106 @@ response = game.reset()
 while not response["done"]:
     action = response["legal_actions"][0]
     response = game.step({"action": action})
+```
+
+## Ablation CLIs
+
+The repository includes a self-contained ablation suite under `scripts/ablations/`.
+
+Design goals of this folder:
+
+- each ablation has its own runnable CLI
+- outputs stay inside `scripts/ablations/`
+- every ablation writes checkpoints and summaries into its own `ab_*` directory
+- the folder is intentionally lightweight and portable, so moving it closer to the project root should require minimal edits
+
+When you run an ablation script, it creates its output directory on demand:
+
+- `scripts/ablations/ab_1/`
+- `scripts/ablations/ab_2/`
+- `scripts/ablations/ab_3/`
+- `scripts/ablations/ab_4/`
+- `scripts/ablations/ab_5/`
+- `scripts/ablations/ab_6/`
+
+Each directory stores the checkpoints plus a `run_summary.json` file that can later be consumed by the comparison CLI.
+
+### Ablation matrix
+
+| Ablation | Script | Main setup |
+| --- | --- | --- |
+| `ab_1` | `python scripts/ablations/ab_1_feedforward_mse.py` | Feedforward Double DQN, minimal observation profile, MSE loss, hard targets |
+| `ab_2` | `python scripts/ablations/ab_2_gru_huber.py` | GRU recurrent Double DQN, realistic partial observation, Huber loss, hard targets |
+| `ab_3` | `python scripts/ablations/ab_3_lstm_huber.py` | LSTM recurrent Double DQN, same realistic partial observation, Huber loss, hard targets |
+| `ab_4` | `python scripts/ablations/ab_4_dueling_gru_soft.py` | Dueling GRU, realistic partial observation, AdamW, dropout, soft targets |
+| `ab_5` | `python scripts/ablations/ab_5_unknown_progress_mse.py` | GRU, unknown shoe progress, MSE loss, longer replay sequences, soft targets |
+| `ab_6` | `python scripts/ablations/ab_6_fully_observable_dueling.py` | Dueling LSTM, fully observable simulator profile, AdamW, soft targets |
+
+### What each ablation is testing
+
+| Ablation | Main question |
+| --- | --- |
+| `ab_1` | How much performance survives when both recurrence and temporal table context are removed? |
+| `ab_2` | What does a strong but standard recurrent baseline look like under realistic table observations? |
+| `ab_3` | GRU vs LSTM under the same realistic partially observable regime |
+| `ab_4` | Does dueling decomposition plus soft targets improve stability under realistic table play? |
+| `ab_5` | How robust is the agent when shoe progress is hidden and training uses a harsher MSE objective? |
+| `ab_6` | What happens when a stronger model receives near upper-bound simulator visibility? |
+
+### Run one ablation
+
+```bash
+python scripts/ablations/ab_1_feedforward_mse.py
+python scripts/ablations/ab_2_gru_huber.py
+python scripts/ablations/ab_3_lstm_huber.py
+python scripts/ablations/ab_4_dueling_gru_soft.py
+python scripts/ablations/ab_5_unknown_progress_mse.py
+python scripts/ablations/ab_6_fully_observable_dueling.py
+```
+
+Useful runtime overrides supported by every ablation CLI:
+
+```bash
+python scripts/ablations/ab_2_gru_huber.py --epochs 8 --env-steps-per-epoch 1024 --num-envs 8 --device auto
+python scripts/ablations/ab_5_unknown_progress_mse.py --quiet
+python scripts/ablations/ab_3_lstm_huber.py --dry-run
+```
+
+### Run the full ablation suite
+
+```bash
+python scripts/ablations/run_all.py
+```
+
+Optional examples:
+
+```bash
+python scripts/ablations/run_all.py --epochs 8 --env-steps-per-epoch 1024
+python scripts/ablations/run_all.py --only ab_2 ab_3 ab_4
+python scripts/ablations/run_all.py --seed-offset 1000 --continue-on-error
+```
+
+`run_all.py` also refreshes the comparison artifact at the end of the run.
+
+### Compare finished ablations
+
+```bash
+python scripts/ablations/compare.py
+```
+
+By default, the comparison ranks ablations by `ev_per_1000_hands` using the best available evaluation metrics from each `run_summary.json`.
+
+You can also compare using another metric:
+
+```bash
+python scripts/ablations/compare.py --metric reward_per_round
+python scripts/ablations/compare.py --metric loss_rate --lower-is-better
+```
+
+The comparison summary is written to:
+
+```text
+scripts/ablations/ablation_comparison.json
 ```
 
 ## Notebook workflow

@@ -1,31 +1,46 @@
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 
+# Python envs
 .Python
 .python-version
 .venv/
 venv/
 env/
 
+# Testing / tooling
 .coverage
 .hypothesis/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 
+# Jupyter
 .ipynb_checkpoints/
+**/.ipynb_checkpoints/
 
+# Build artifacts
 build/
 dist/
 *.egg-info/
 
+# Project outputs
 outputs/
 training_checkpoints/
 change_logs/
 artifacts/
+
+# Ablation outputs
+scripts/ablations/ab_*/
+scripts/ablations/ablation_comparison.json
+scripts/ablations/run_all_summary.json
+
+# Model weights
 *.pt
 *.pth
 
+# OS files
 Thumbs.db
 .DS_Store

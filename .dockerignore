@@ -13,6 +13,9 @@ change_logs/
 outputs/
 training_checkpoints/
 artifacts/
+scripts/ablations/ab_*/
+scripts/ablations/ablation_comparison.json
+scripts/ablations/run_all_summary.json
 *.pt
 *.pth
 
