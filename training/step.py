@@ -11,6 +11,25 @@ from loss import compute_td_loss
 from .config import OptimizationConfig, TargetUpdateConfig
 
 
+def _infer_model_device(model: nn.Module) -> torch.device:
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return torch.device("cpu")
+
+
+def move_training_batch_to_device(batch: Any, device: torch.device) -> Any:
+    if isinstance(batch, torch.Tensor):
+        return batch.to(device)
+    if isinstance(batch, dict):
+        return {key: move_training_batch_to_device(value, device) for key, value in batch.items()}
+    if isinstance(batch, list):
+        return [move_training_batch_to_device(value, device) for value in batch]
+    if isinstance(batch, tuple):
+        return tuple(move_training_batch_to_device(value, device) for value in batch)
+    return batch
+
+
 def build_optimizer(model: nn.Module, config: OptimizationConfig) -> torch.optim.Optimizer:
     optimizer_cls = torch.optim.Adam if config.optimizer == "adam" else torch.optim.AdamW
     return optimizer_cls(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
@@ -78,6 +97,7 @@ def train_gradient_step(
     start_time = perf_counter()
     online_network.train()
     target_network.eval()
+    batch = move_training_batch_to_device(batch, _infer_model_device(online_network))
 
     optimizer.zero_grad(set_to_none=True)
     loss_info = compute_td_loss(

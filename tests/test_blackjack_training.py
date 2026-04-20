@@ -23,6 +23,7 @@ from training import (
     train_model,
     train_one_epoch,
 )
+from training.step import move_training_batch_to_device
 
 
 class BlackjackTrainingPipelineTests(unittest.TestCase):
@@ -87,6 +88,27 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(torch.isfinite(parameter).all().item())
             if parameter.grad is not None:
                 self.assertTrue(torch.isfinite(parameter.grad).all().item())
+
+    def test_move_training_batch_to_device_moves_nested_tensors(self) -> None:
+        device = torch.device("cpu")
+        batch = {
+            "action": torch.tensor([1, 2], dtype=torch.long),
+            "reward": torch.tensor([0.5, -1.0], dtype=torch.float32),
+            "nested": {
+                "padding_mask": torch.tensor([[1, 0], [1, 1]], dtype=torch.bool),
+                "states": [torch.tensor([1.0]), {"mask": torch.tensor([0, 1], dtype=torch.bool)}],
+            },
+            "python_only": [{"foo": "bar"}],
+        }
+
+        moved = move_training_batch_to_device(batch, device)
+
+        self.assertEqual(moved["action"].device.type, "cpu")
+        self.assertEqual(moved["reward"].device.type, "cpu")
+        self.assertEqual(moved["nested"]["padding_mask"].device.type, "cpu")
+        self.assertEqual(moved["nested"]["states"][0].device.type, "cpu")
+        self.assertEqual(moved["nested"]["states"][1]["mask"].device.type, "cpu")
+        self.assertEqual(moved["python_only"][0]["foo"], "bar")
 
     def test_train_model_runs_feedforward_pipeline_and_saves_checkpoints(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")
@@ -156,6 +178,27 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(math.isfinite(summary["eval"]["ev_per_1000_hands"]))
             self.assertTrue((Path(tmp_dir) / "latest.pt").exists())
             self.assertTrue((Path(tmp_dir) / "best_eval.pt").exists())
+            self.assert_finite_model(trainer.online_network)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is not available")
+    def test_train_one_epoch_runs_on_cuda_without_device_mismatch(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="lstm")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=True)
+            config.trainer.device = "cuda"
+            config.trainer.env_steps_per_epoch = 8
+            config.trainer.max_updates_per_epoch = 2
+            config.replay_buffer.batch_size = 1
+            config.replay_buffer.warmup_size = 2
+            trainer = build_trainer(env, model, pipeline_config=config)
+            summary = train_one_epoch(trainer)
+
+            self.assertEqual(next(trainer.online_network.parameters()).device.type, "cuda")
+            self.assertGreater(trainer.update_count, 0)
+            self.assertTrue(math.isfinite(summary["loss"]))
+            self.assertTrue(math.isfinite(summary["grad_norm"]))
             self.assert_finite_model(trainer.online_network)
 
 
