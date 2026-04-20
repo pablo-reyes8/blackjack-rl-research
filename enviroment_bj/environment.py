@@ -59,8 +59,13 @@ class BlackjackEnvironment:
         self._reshuffle_pending = False
         self._start_state_prepared = False
         self._manual_shoe_loaded = False
+        self.enable_transition_recording = True
         self._initialize_temporal_state()
         self._reset_round_state()
+
+    def set_runtime_options(self, *, enable_transition_recording: bool | None = None) -> None:
+        if enable_transition_recording is not None:
+            self.enable_transition_recording = bool(enable_transition_recording)
 
     def _initialize_temporal_state(self) -> None:
         self.shuffle_count = 0
@@ -265,10 +270,15 @@ class BlackjackEnvironment:
             raise RuntimeError("The round is over. Call reset() to deal the next hand.")
 
         action_name = coerce_action_name(action)
-        observation_before = self.get_agent_observation()
-        public_state_before = self.get_public_state()
         action_mask_by_name_before = self.legal_actions()
-        action_mask_before = [int(action_mask_by_name_before[name]) for name in ACTION_ORDER]
+        if self.enable_transition_recording:
+            observation_before = self.get_agent_observation()
+            public_state_before = self.get_public_state()
+            action_mask_before = [int(action_mask_by_name_before[name]) for name in ACTION_ORDER]
+        else:
+            observation_before = None
+            public_state_before = None
+            action_mask_before = None
 
         if not action_mask_by_name_before.get(action_name, False):
             raise ValueError(f"Illegal action '{action_name}' for the current state")
@@ -762,6 +772,9 @@ class BlackjackEnvironment:
         drawn_cards: list[dict[str, Any]],
         public_actions_added: list[dict[str, Any]],
     ) -> None:
+        if not self.enable_transition_recording:
+            response["info"]["transition_log_length"] = 0
+            return
         transition = {
             "step_index": len(self.transition_log),
             "action": action_name,

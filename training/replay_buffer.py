@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import deque
-from copy import deepcopy
 import random
 from typing import Any, Sequence
 
@@ -22,7 +21,7 @@ class FeedForwardReplayBuffer:
         return len(self.storage)
 
     def add(self, transition: dict[str, Any]) -> None:
-        self.storage.append(deepcopy(transition))
+        self.storage.append(transition)
 
     def can_sample(self) -> bool:
         return len(self.storage) >= self.config.batch_size
@@ -37,11 +36,11 @@ class FeedForwardReplayBuffer:
             "action": torch.tensor([transition["action"] for transition in transitions], dtype=torch.long),
             "reward": torch.tensor([transition["reward"] for transition in transitions], dtype=torch.float32),
             "done": torch.tensor([transition["done"] for transition in transitions], dtype=torch.bool),
-            "action_mask": torch.tensor([transition["action_mask"] for transition in transitions], dtype=torch.bool),
-            "next_action_mask": torch.tensor(
+            "action_mask": torch.stack([transition["action_mask"] for transition in transitions], dim=0).to(torch.bool),
+            "next_action_mask": torch.stack(
                 [transition["next_action_mask"] for transition in transitions],
-                dtype=torch.bool,
-            ),
+                dim=0,
+            ).to(torch.bool),
         }
 
 
@@ -57,7 +56,7 @@ class RecurrentReplayBuffer:
     def add(self, sequence: dict[str, Any]) -> None:
         if len(sequence["action"]) < self.config.min_sequence_length:
             return
-        self.storage.append(deepcopy(sequence))
+        self.storage.append(sequence)
 
     def can_sample(self) -> bool:
         return len(self.storage) >= self.config.batch_size
@@ -89,14 +88,11 @@ class RecurrentReplayBuffer:
             reward[batch_index, :truncated_len] = torch.tensor(sequence["reward"][:truncated_len], dtype=torch.float32)
             done[batch_index, :truncated_len] = torch.tensor(sequence["done"][:truncated_len], dtype=torch.bool)
             padding_mask[batch_index, :truncated_len] = True
-            action_mask[batch_index, :truncated_len] = torch.tensor(
-                sequence["action_mask"][:truncated_len],
-                dtype=torch.bool,
-            )
-            next_action_mask[batch_index, :truncated_len] = torch.tensor(
+            action_mask[batch_index, :truncated_len] = torch.stack(sequence["action_mask"][:truncated_len], dim=0).to(torch.bool)
+            next_action_mask[batch_index, :truncated_len] = torch.stack(
                 sequence["next_action_mask"][:truncated_len],
-                dtype=torch.bool,
-            )
+                dim=0,
+            ).to(torch.bool)
 
         return {
             "state": states,

@@ -27,6 +27,7 @@ from .step import build_optimizer, build_scheduler, hard_update_target, maybe_up
 class EnvironmentRunnerState:
     env: Any
     response: dict[str, Any] | None = None
+    encoded_response: dict[str, Any] | None = None
     hidden_state: Any = None
     pending_sequence: list[dict[str, Any]] = field(default_factory=list)
 
@@ -68,9 +69,22 @@ class BlackjackRLTrainer:
         self.update_count = 0
         self.best_eval_metrics: dict[str, Any] | None = None
         self.training_history: list[dict[str, Any]] = []
+        self._set_env_runtime_mode(enable_transition_recording=False)
         torch.manual_seed(self.pipeline_config.trainer.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.pipeline_config.trainer.seed)
+
+    def _set_env_runtime_mode(self, *, enable_transition_recording: bool) -> None:
+        for env in self.envs:
+            if hasattr(env, "set_runtime_options"):
+                env.set_runtime_options(enable_transition_recording=enable_transition_recording)
+
+    def _encode_response_for_storage(self, response: dict[str, Any]) -> dict[str, Any]:
+        encoded = self.online_network.encoder(response)
+        return {
+            "state_vector": encoded["state_vector"].detach().cpu(),
+            "action_mask": encoded["action_mask"].detach().cpu(),
+        }
 
     def _resolve_device(self, device_name: str) -> torch.device:
         if device_name == "auto":
@@ -160,6 +174,48 @@ class BlackjackRLTrainer:
             "double_after_split_allowed": reference_env.config.double_after_split_allowed,
         }
 
+    def _count_train_triggers_between(self, start_env_steps: int, end_env_steps: int) -> int:
+        frequency = self.pipeline_config.trainer.train_frequency
+        return max(0, (end_env_steps // frequency) - (start_env_steps // frequency))
+
+    def _stack_recurrent_hidden_state(self, hidden_states: list[Any]) -> Any:
+        first_state = hidden_states[0]
+        if isinstance(first_state, tuple):
+            return (
+                torch.cat([state[0] for state in hidden_states], dim=1),
+                torch.cat([state[1] for state in hidden_states], dim=1),
+            )
+        return torch.cat(hidden_states, dim=1)
+
+    def _split_recurrent_hidden_state(self, hidden_state: Any, batch_size: int) -> list[Any]:
+        if isinstance(hidden_state, tuple):
+            h, c = hidden_state
+            return [(h[:, index : index + 1].contiguous(), c[:, index : index + 1].contiguous()) for index in range(batch_size)]
+        return [hidden_state[:, index : index + 1].contiguous() for index in range(batch_size)]
+
+    def _batched_policy_inference(self, env_states: list[EnvironmentRunnerState]) -> tuple[torch.Tensor, torch.Tensor, list[Any] | None]:
+        encoded_states = [env_state.encoded_response for env_state in env_states]
+        with torch.no_grad():
+            if self.is_recurrent:
+                hidden_batch = self._stack_recurrent_hidden_state([env_state.hidden_state for env_state in env_states])
+                batch = {
+                    "state_vector": torch.stack([state["state_vector"] for state in encoded_states], dim=0).unsqueeze(1),
+                    "action_mask": torch.stack([state["action_mask"] for state in encoded_states], dim=0).unsqueeze(1),
+                    "padding_mask": torch.ones((len(encoded_states), 1), dtype=torch.bool),
+                    "module_tensors": {},
+                    "metadata": {"batch_size": len(encoded_states), "sequence_lengths": [1] * len(encoded_states)},
+                }
+                policy_output = self.online_network(batch, hidden_state=hidden_batch)
+                next_hidden_states = self._split_recurrent_hidden_state(policy_output["hidden_state"], len(env_states))
+                return (
+                    policy_output["masked_q_values"].squeeze(1),
+                    policy_output["action_mask"].squeeze(1),
+                    next_hidden_states,
+                )
+
+            policy_output = self.online_network(encoded_states)
+            return policy_output["masked_q_values"], policy_output["action_mask"], None
+
     def _temporary_eval_mode(self) -> tuple[bool, bool]:
         online_was_training = self.online_network.training
         target_was_training = self.target_network.training
@@ -186,19 +242,14 @@ class BlackjackRLTrainer:
                 for env_state in self.env_states:
                     self._ensure_active_response(env_state, tracker)
 
-                    with torch.no_grad():
-                        if self.is_recurrent:
-                            policy_output = self.online_network.forward_step(
-                                env_state.response,
-                                hidden_state=env_state.hidden_state,
-                            )
-                            env_state.hidden_state = policy_output["hidden_state"]
-                            masked_q_values = policy_output["masked_q_values"].squeeze(0)
-                            action_mask = policy_output["action_mask"].squeeze(0)
-                        else:
-                            policy_output = self.online_network(env_state.response)
-                            masked_q_values = policy_output["masked_q_values"].squeeze(0)
-                            action_mask = policy_output["action_mask"].squeeze(0)
+                masked_q_values_batch, action_mask_batch, next_hidden_states = self._batched_policy_inference(self.env_states)
+                if next_hidden_states is not None:
+                    for env_state, hidden_state in zip(self.env_states, next_hidden_states):
+                        env_state.hidden_state = hidden_state
+
+                for env_index, env_state in enumerate(self.env_states):
+                    masked_q_values = masked_q_values_batch[env_index]
+                    action_mask = action_mask_batch[env_index]
 
                     action_index, was_random = select_epsilon_greedy_action(
                         masked_q_values=masked_q_values,
@@ -220,15 +271,16 @@ class BlackjackRLTrainer:
                     tracker.record_round_result(next_response)
                     self.env_step_count += 1
                     self.epsilon_scheduler.step()
+                    encoded_next_response = self._encode_response_for_storage(next_response)
 
                     transition = {
-                        "state": deepcopy(env_state.response),
-                        "next_state": deepcopy(next_response),
+                        "state": env_state.encoded_response,
+                        "next_state": encoded_next_response,
                         "action": action_index,
                         "reward": float(next_response["reward"]),
                         "done": bool(next_response["done"]),
-                        "action_mask": list(env_state.response["action_mask"]),
-                        "next_action_mask": list(next_response["action_mask"]),
+                        "action_mask": env_state.encoded_response["action_mask"],
+                        "next_action_mask": encoded_next_response["action_mask"],
                     }
 
                     if self.is_recurrent:
@@ -243,10 +295,12 @@ class BlackjackRLTrainer:
 
                     if next_response["done"]:
                         env_state.response = None
+                        env_state.encoded_response = None
                         if self.is_recurrent and self.pipeline_config.trainer.reset_hidden_on_round_end:
                             env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
                     else:
                         env_state.response = next_response
+                        env_state.encoded_response = encoded_next_response
         finally:
             self._restore_mode(online_was_training, target_was_training)
 
@@ -258,6 +312,7 @@ class BlackjackRLTrainer:
                     env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
 
             env_state.response = env_state.env.reset()
+            env_state.encoded_response = self._encode_response_for_storage(env_state.response)
             if self.is_recurrent and env_state.hidden_state is None:
                 env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
 
@@ -308,6 +363,9 @@ class BlackjackRLTrainer:
 
     def evaluate(self) -> dict[str, Any]:
         eval_envs = clone_environments(self.envs, seed_offset=self.pipeline_config.trainer.seed + 100_000)
+        for env in eval_envs:
+            if hasattr(env, "set_runtime_options"):
+                env.set_runtime_options(enable_transition_recording=False)
         return evaluate_policy(
             envs=eval_envs,
             model=self.online_network,
@@ -334,6 +392,7 @@ class BlackjackRLTrainer:
         total_updates_this_epoch = self._estimated_updates_this_epoch()
 
         for step_in_epoch in range(1, self.pipeline_config.trainer.env_steps_per_epoch + 1):
+            env_steps_before_collect = self.env_step_count
             self.collect_experience(num_steps=1, tracker=behavior_tracker, epsilon=self.epsilon_scheduler.value())
             self.logger.log_collection(
                 env_step_in_epoch=step_in_epoch,
@@ -343,9 +402,9 @@ class BlackjackRLTrainer:
                 metrics=behavior_tracker.summary(),
             )
 
-            should_train = self._buffer_ready() and (self.env_step_count % self.pipeline_config.trainer.train_frequency == 0)
-            if should_train:
-                for _ in range(self.pipeline_config.trainer.updates_per_train_step):
+            train_triggers = self._count_train_triggers_between(env_steps_before_collect, self.env_step_count)
+            if self._buffer_ready() and train_triggers > 0:
+                for _ in range(train_triggers * self.pipeline_config.trainer.updates_per_train_step):
                     if (
                         self.pipeline_config.trainer.max_updates_per_epoch is not None
                         and updates_this_epoch >= self.pipeline_config.trainer.max_updates_per_epoch

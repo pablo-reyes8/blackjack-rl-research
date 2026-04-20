@@ -76,7 +76,11 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
             module_tensors[name] = tensor
 
         state_vector = torch.cat(list(module_tensors.values()), dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
-        action_mask = torch.tensor(response.get("action_mask", [0] * len(ACTION_ORDER)), dtype=torch.bool)
+        action_mask_value = response.get("action_mask", [0] * len(ACTION_ORDER))
+        if isinstance(action_mask_value, torch.Tensor):
+            action_mask = action_mask_value.detach().to(dtype=torch.bool)
+        else:
+            action_mask = torch.tensor(action_mask_value, dtype=torch.bool)
 
         if self.config.encode_action_mask_features:
             state_vector = torch.cat([state_vector, action_mask.to(torch.float32)], dim=0)

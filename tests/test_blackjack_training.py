@@ -130,6 +130,24 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(any(path.name.startswith("step_") for path in Path(tmp_dir).glob("*.pt")))
             self.assert_finite_model(trainer.online_network)
 
+    def test_replay_buffer_stores_compact_encoded_states_instead_of_raw_responses(self) -> None:
+        env = self.make_env(observation_profile="minimal_basic_strategy")
+        model = FeedForwardDoubleDQN.from_profile("minimal_basic_strategy")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=False)
+            config.replay_buffer.warmup_size = 4
+            trainer = build_trainer(env, model, pipeline_config=config)
+            trainer.warmup()
+
+            transition = trainer.replay_buffer.storage[0]
+            self.assertIn("state_vector", transition["state"])
+            self.assertIn("action_mask", transition["state"])
+            self.assertNotIn("observation", transition["state"])
+            self.assertNotIn("info", transition["state"])
+            self.assertEqual(transition["state"]["state_vector"].device.type, "cpu")
+            self.assertEqual(transition["next_state"]["state_vector"].device.type, "cpu")
+
     def test_train_one_epoch_runs_recurrent_pipeline_with_gru(self) -> None:
         env = self.make_env(observation_profile="table_realistic_default")
         model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")

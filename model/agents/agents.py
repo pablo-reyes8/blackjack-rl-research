@@ -57,12 +57,13 @@ class BaseBlackjackQNetwork(nn.Module):
             if not inputs:
                 raise ValueError("inputs cannot be empty")
             if isinstance(inputs[0], Mapping) and isinstance(inputs[0].get("state_vector"), torch.Tensor):
+                first_module_tensors = inputs[0].get("module_tensors", {})
                 encoded = {
                     "state_vector": torch.stack([item["state_vector"] for item in inputs], dim=0),
                     "action_mask": torch.stack([item["action_mask"] for item in inputs], dim=0),
                     "module_tensors": {
                         key: torch.stack([item["module_tensors"][key] for item in inputs], dim=0)
-                        for key in inputs[0]["module_tensors"]
+                        for key in first_module_tensors
                     },
                     "metadata": {"batch_size": len(inputs)},
                 }
@@ -94,13 +95,14 @@ class BaseBlackjackQNetwork(nn.Module):
                 raise ValueError("inputs cannot be empty")
             if isinstance(inputs[0], Mapping):
                 if isinstance(inputs[0].get("state_vector"), torch.Tensor):
+                    first_module_tensors = inputs[0].get("module_tensors", {})
                     encoded = {
                         "state_vector": torch.stack([item["state_vector"] for item in inputs], dim=0).unsqueeze(0),
                         "action_mask": torch.stack([item["action_mask"] for item in inputs], dim=0).unsqueeze(0),
                         "padding_mask": torch.ones((1, len(inputs)), dtype=torch.bool),
                         "module_tensors": {
                             key: torch.stack([item["module_tensors"][key] for item in inputs], dim=0).unsqueeze(0)
-                            for key in inputs[0]["module_tensors"]
+                            for key in first_module_tensors
                         },
                         "metadata": {"batch_size": 1, "sequence_lengths": [len(inputs)]},
                     }
