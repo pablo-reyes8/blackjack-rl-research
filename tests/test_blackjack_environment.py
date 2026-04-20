@@ -124,6 +124,37 @@ class BlackjackEnvironmentTests(unittest.TestCase):
         self.assertTrue(next_round["info"]["public_state"]["shoe"]["reshuffled_on_reset"])
         self.assertEqual(next_round["observation"]["discard_summary"]["observed_cards_count"], 3)
 
+    def test_observed_card_summaries_match_visible_cards_incrementally(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        env.load_shoe(["10", "6", "7", "10", "5"], total_cards=5)
+
+        env.reset()
+        final_response = env.step("stand")
+        observed_cards = [event["card"] for event in env.observed_cards_history]
+
+        self.assertEqual(observed_cards, ["10", "6", "7", "10", "5"])
+        self.assertEqual(env.get_observed_cards_summary("rank_counts"), {
+            "A": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 1,
+            "6": 1,
+            "7": 1,
+            "8": 0,
+            "9": 0,
+            "10": 2,
+            "J": 0,
+            "Q": 0,
+            "K": 0,
+        })
+        self.assertEqual(env.get_observed_cards_summary("low_neutral_high"), {"low": 2, "neutral": 1, "high": 2})
+        self.assertEqual(final_response["observation"]["discard_summary"], {
+            "observed_cards_count": 5,
+            "by_group": {"low": 2, "neutral": 1, "high": 2},
+            "recent_cards": ["10", "6", "7", "10", "5"],
+        })
+
     def test_unknown_progress_start_burns_hidden_rounds_without_leaking_progress(self) -> None:
         env = self.make_env(
             observation_profile="table_realistic_unknown_progress",

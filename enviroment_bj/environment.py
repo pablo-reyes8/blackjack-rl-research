@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 from copy import deepcopy
 from dataclasses import asdict
 import random
@@ -55,6 +55,7 @@ class BlackjackEnvironment:
             penetration=self.config.shoe_penetration,
             rng=self._rng,
         )
+        self._build_table_rule_caches()
         self.round_index = 0
         self._reshuffle_pending = False
         self._start_state_prepared = False
@@ -82,7 +83,57 @@ class BlackjackEnvironment:
         self.hidden_burned_rounds = 0
         self.hidden_burned_cards = 0
         self.hidden_burned_reshuffles = 0
+        self._reset_observed_card_caches()
         self._start_new_shoe_tracking(reason="initial_shoe", record_action=False)
+
+    def _build_table_rule_caches(self) -> None:
+        full_rules = {
+            "n_decks": self.config.n_decks,
+            "shoe_penetration": self.config.shoe_penetration,
+            "dealer_hits_soft_17": self.config.dealer_hits_soft_17,
+            "blackjack_payout": self.config.blackjack_payout,
+            "dealer_peeks_for_blackjack": self.config.dealer_peeks_for_blackjack,
+            "double_allowed_on": self.config.double_allowed_on,
+            "double_after_split_allowed": self.config.double_after_split_allowed,
+            "split_rule": self.config.split_rule,
+            "max_hands_after_split": self.config.max_hands_after_split,
+            "resplit_aces_allowed": self.config.resplit_aces_allowed,
+            "hit_split_aces_allowed": self.config.hit_split_aces_allowed,
+            "surrender_allowed": self.config.surrender_allowed,
+            "insurance_allowed": self.config.insurance_allowed,
+            "base_bet": self.config.base_bet,
+            "reward_mode": "round_end",
+        }
+        self._cached_full_table_rules = full_rules
+
+        obs_cfg = self.config.observation
+        if not obs_cfg.obs_include_table_rules:
+            self._cached_visible_table_rules = {}
+            return
+
+        if obs_cfg.obs_include_visible_rules_only:
+            selected = {name: full_rules[name] for name in VISIBLE_TABLE_RULES}
+        else:
+            selected = dict(full_rules)
+
+        if obs_cfg.obs_include_hidden_rules:
+            for name in HIDDEN_TABLE_RULES:
+                selected[name] = full_rules[name]
+
+        if obs_cfg.obs_include_n_decks:
+            selected["n_decks"] = full_rules["n_decks"]
+
+        if obs_cfg.obs_include_shoe_penetration_rule:
+            selected["shoe_penetration"] = full_rules["shoe_penetration"]
+
+        self._cached_visible_table_rules = selected
+
+    def _reset_observed_card_caches(self) -> None:
+        recent_window = max(self.config.observation.obs_recent_cards_window, 10)
+        self._observed_rank_counts = {rank: 0 for rank in CARD_RANKS}
+        self._observed_group_counts = {"low": 0, "neutral": 0, "high": 0}
+        self._observed_cards_count = 0
+        self._recent_observed_cards: deque[str] = deque(maxlen=recent_window)
 
     def _reset_round_state(self) -> None:
         self.player_hands: list[HandState] = []
@@ -247,6 +298,7 @@ class BlackjackEnvironment:
     def _clear_public_histories_after_hidden_burn(self) -> None:
         self.observed_cards_history = []
         self.public_action_history = []
+        self._reset_observed_card_caches()
         self.last_round_outcome = None
         self.total_rounds_played = 0
         self.total_player_hands_seen = 0
@@ -575,75 +627,36 @@ class BlackjackEnvironment:
     def get_observed_cards_summary(self, mode: str | None = None) -> dict[str, Any]:
         obs_cfg = self.config.observation
         selected_mode = obs_cfg.obs_observed_cards_mode if mode is None else mode
-        cards = [event["card"] for event in self.observed_cards_history]
 
         if selected_mode == "rank_counts":
-            counts = Counter(cards)
-            return {rank: counts.get(rank, 0) for rank in CARD_RANKS}
+            return dict(self._observed_rank_counts)
 
         if selected_mode == "low_neutral_high":
-            return self._low_neutral_high_counts(cards)
+            return dict(self._observed_group_counts)
 
         if selected_mode == "recent_cards_sequence":
             return {
                 "window": obs_cfg.obs_recent_cards_window,
-                "cards": cards[-obs_cfg.obs_recent_cards_window :],
+                "cards": list(self._recent_observed_cards)[-obs_cfg.obs_recent_cards_window :],
             }
 
         raise ValueError("Unsupported observed cards mode")
 
     def get_discard_summary(self) -> dict[str, Any]:
-        cards = [event["card"] for event in self.observed_cards_history]
         return {
-            "observed_cards_count": len(cards),
-            "by_group": self._low_neutral_high_counts(cards),
-            "recent_cards": cards[-min(len(cards), 10) :],
+            "observed_cards_count": self._observed_cards_count,
+            "by_group": dict(self._observed_group_counts),
+            "recent_cards": list(self._recent_observed_cards),
         }
 
     def get_table_rules(self) -> dict[str, Any]:
         return self.get_visible_table_rules()
 
     def get_visible_table_rules(self) -> dict[str, Any]:
-        obs_cfg = self.config.observation
-        if not obs_cfg.obs_include_table_rules:
-            return {}
-
-        full_rules = self.get_full_table_rules()
-        if obs_cfg.obs_include_visible_rules_only:
-            selected = {name: full_rules[name] for name in VISIBLE_TABLE_RULES}
-        else:
-            selected = dict(full_rules)
-
-        if obs_cfg.obs_include_hidden_rules:
-            for name in HIDDEN_TABLE_RULES:
-                selected[name] = full_rules[name]
-
-        if obs_cfg.obs_include_n_decks:
-            selected["n_decks"] = full_rules["n_decks"]
-
-        if obs_cfg.obs_include_shoe_penetration_rule:
-            selected["shoe_penetration"] = full_rules["shoe_penetration"]
-
-        return selected
+        return dict(self._cached_visible_table_rules)
 
     def get_full_table_rules(self) -> dict[str, Any]:
-        return {
-            "n_decks": self.config.n_decks,
-            "shoe_penetration": self.config.shoe_penetration,
-            "dealer_hits_soft_17": self.config.dealer_hits_soft_17,
-            "blackjack_payout": self.config.blackjack_payout,
-            "dealer_peeks_for_blackjack": self.config.dealer_peeks_for_blackjack,
-            "double_allowed_on": self.config.double_allowed_on,
-            "double_after_split_allowed": self.config.double_after_split_allowed,
-            "split_rule": self.config.split_rule,
-            "max_hands_after_split": self.config.max_hands_after_split,
-            "resplit_aces_allowed": self.config.resplit_aces_allowed,
-            "hit_split_aces_allowed": self.config.hit_split_aces_allowed,
-            "surrender_allowed": self.config.surrender_allowed,
-            "insurance_allowed": self.config.insurance_allowed,
-            "base_bet": self.config.base_bet,
-            "reward_mode": "round_end",
-        }
+        return dict(self._cached_full_table_rules)
 
     def get_public_state(self) -> dict[str, Any]:
         current_hand = self._current_hand()
@@ -825,6 +838,15 @@ class BlackjackEnvironment:
         if hand_index is not None:
             event["hand_index"] = hand_index
         self.observed_cards_history.append(event)
+        self._observed_rank_counts[card] += 1
+        self._observed_cards_count += 1
+        self._recent_observed_cards.append(card)
+        if card in LOW_RANKS:
+            self._observed_group_counts["low"] += 1
+        elif card in NEUTRAL_RANKS:
+            self._observed_group_counts["neutral"] += 1
+        else:
+            self._observed_group_counts["high"] += 1
 
     def _record_public_action(
         self,
@@ -861,6 +883,7 @@ class BlackjackEnvironment:
 
         if self.config.observation.obs_reset_history_on_shuffle:
             self.observed_cards_history = []
+            self._reset_observed_card_caches()
 
         if record_action:
             self._record_public_action(public_actions_added, actor="table", action="reshuffle", reason=reason)
