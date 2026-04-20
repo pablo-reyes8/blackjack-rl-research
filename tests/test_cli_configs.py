@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from blackjack_rl_cli.common import load_experiment_config, resolve_training_setup, summarize_setup
+from scripts.blackjack_rl_cli.common import load_experiment_config, resolve_training_setup, summarize_setup
 from training import train_model
 
 

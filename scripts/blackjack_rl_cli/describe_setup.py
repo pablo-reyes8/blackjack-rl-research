@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import argparse
 
-from blackjack_rl_cli.common import load_experiment_config, resolve_training_setup, summarize_setup, to_pretty_json, write_json_file
+from scripts.blackjack_rl_cli.common import (
+    load_experiment_config,
+    resolve_training_setup,
+    summarize_setup,
+    to_pretty_json,
+    write_json_file,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

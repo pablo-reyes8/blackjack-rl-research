@@ -22,9 +22,12 @@ dist/
 
 outputs/
 training_checkpoints/
+change_logs/
 artifacts/
 *.pt
 *.pth
 
 Thumbs.db
 .DS_Store
+
+

@@ -4,13 +4,19 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from training import train_model
 
-from blackjack_rl_cli.common import load_experiment_config, resolve_training_setup, summarize_setup, to_pretty_json, write_json_file
+from scripts.blackjack_rl_cli.common import (
+    load_experiment_config,
+    resolve_training_setup,
+    summarize_setup,
+    to_pretty_json,
+    write_json_file,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

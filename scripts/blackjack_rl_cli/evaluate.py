@@ -5,13 +5,13 @@ from pathlib import Path
 import random
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from training.evaluation import evaluate_policy
 
-from blackjack_rl_cli.common import (
+from scripts.blackjack_rl_cli.common import (
     build_model_from_checkpoint,
     build_training_pipeline_config,
     load_checkpoint_payload,

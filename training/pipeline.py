@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import random
+from time import perf_counter
 from typing import Any
 
 import torch
@@ -96,7 +97,68 @@ class BlackjackRLTrainer:
         while len(self.replay_buffer) < self.pipeline_config.replay_buffer.warmup_size:
             self.collect_experience(num_steps=1, tracker=tracker, epsilon=1.0)
             self.logger.log_warmup(buffer_size=len(self.replay_buffer), target_size=self.pipeline_config.replay_buffer.warmup_size)
+        self.logger.log_warmup(
+            buffer_size=len(self.replay_buffer),
+            target_size=self.pipeline_config.replay_buffer.warmup_size,
+            force=True,
+        )
         return tracker.summary()
+
+    def _estimated_updates_this_epoch(self) -> int:
+        updates = 0
+        env_steps_at_epoch_start = self.env_step_count
+        nominal_env_steps_this_epoch = self.pipeline_config.trainer.env_steps_per_epoch * len(self.env_states)
+        for global_env_step in range(env_steps_at_epoch_start + 1, env_steps_at_epoch_start + nominal_env_steps_this_epoch + 1):
+            if global_env_step % self.pipeline_config.trainer.train_frequency == 0:
+                updates += self.pipeline_config.trainer.updates_per_train_step
+        if self.pipeline_config.trainer.max_updates_per_epoch is not None:
+            updates = min(updates, self.pipeline_config.trainer.max_updates_per_epoch)
+        return max(updates, 1)
+
+    def build_run_summary(self) -> dict[str, Any]:
+        reference_env = self.envs[0]
+        model_config = self.online_network.config
+        parameter_count = sum(parameter.numel() for parameter in self.online_network.parameters())
+        return {
+            "architecture": model_config.architecture,
+            "recurrent_type": getattr(model_config, "recurrent_type", "none"),
+            "encoder_profile": model_config.encoder.profile,
+            "observation_profile": reference_env.config.observation.profile,
+            "start_state_mode": reference_env.start_state.mode,
+            "device": str(self.device),
+            "total_epochs": self.pipeline_config.trainer.total_epochs,
+            "num_envs": len(self.envs),
+            "nominal_env_steps_per_epoch": self.pipeline_config.trainer.env_steps_per_epoch * len(self.envs),
+            "estimated_updates_per_epoch": self._estimated_updates_this_epoch(),
+            "parameter_count": parameter_count,
+            "optimizer": self.pipeline_config.optimization.optimizer,
+            "learning_rate": self.pipeline_config.optimization.learning_rate,
+            "loss_type": self.pipeline_config.trainer.loss.loss_type,
+            "gamma": self.pipeline_config.trainer.loss.gamma,
+            "gradient_clipping": self.pipeline_config.optimization.gradient_clipping,
+            "max_grad_norm": self.pipeline_config.optimization.max_grad_norm,
+            "warmup_size": self.pipeline_config.replay_buffer.warmup_size,
+            "buffer_capacity": self.pipeline_config.replay_buffer.capacity,
+            "batch_size": self.pipeline_config.replay_buffer.batch_size,
+            "sequence_length": self.pipeline_config.replay_buffer.sequence_length,
+            "min_sequence_length": self.pipeline_config.replay_buffer.min_sequence_length,
+            "epsilon_start": self.pipeline_config.epsilon.start,
+            "epsilon_end": self.pipeline_config.epsilon.end,
+            "epsilon_decay_steps": self.pipeline_config.epsilon.decay_steps,
+            "target_update_mode": self.pipeline_config.target_update.mode,
+            "target_hard_interval": self.pipeline_config.target_update.hard_update_interval,
+            "target_soft_tau": self.pipeline_config.target_update.soft_tau,
+            "eval_rounds": self.pipeline_config.evaluation.num_rounds,
+            "eval_max_decisions": self.pipeline_config.evaluation.max_decisions,
+            "checkpoint_dir": str(self.pipeline_config.checkpoints.directory_path),
+            "n_decks": reference_env.config.n_decks,
+            "shoe_penetration": reference_env.config.shoe_penetration,
+            "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
+            "blackjack_payout": reference_env.config.blackjack_payout,
+            "double_allowed_on": reference_env.config.double_allowed_on,
+            "split_rule": reference_env.config.split_rule,
+            "double_after_split_allowed": reference_env.config.double_after_split_allowed,
+        }
 
     def _temporary_eval_mode(self) -> tuple[bool, bool]:
         online_was_training = self.online_network.training
@@ -258,18 +320,26 @@ class BlackjackRLTrainer:
 
     def train_one_epoch(self) -> dict[str, Any]:
         self.epoch_index += 1
+        epoch_start_time = perf_counter()
+        self.logger.log_epoch_start(
+            epoch=self.epoch_index,
+            total_epochs=self.pipeline_config.trainer.total_epochs,
+        )
         if not self._buffer_ready():
             self.warmup()
 
         behavior_tracker = BehaviorMetricsTracker()
         optimization_tracker = ScalarMetricAccumulator()
         updates_this_epoch = 0
+        total_updates_this_epoch = self._estimated_updates_this_epoch()
 
         for step_in_epoch in range(1, self.pipeline_config.trainer.env_steps_per_epoch + 1):
             self.collect_experience(num_steps=1, tracker=behavior_tracker, epsilon=self.epsilon_scheduler.value())
             self.logger.log_collection(
-                epoch=self.epoch_index,
-                env_steps=self.env_step_count,
+                env_step_in_epoch=step_in_epoch,
+                total_env_steps_in_epoch=self.pipeline_config.trainer.env_steps_per_epoch,
+                buffer_size=len(self.replay_buffer),
+                warmup_target=self.pipeline_config.replay_buffer.warmup_size,
                 metrics=behavior_tracker.summary(),
             )
 
@@ -285,9 +355,8 @@ class BlackjackRLTrainer:
                     updates_this_epoch += 1
                     optimization_tracker.update(train_result["metrics"])
                     self.logger.log_update(
-                        epoch=self.epoch_index,
-                        env_steps=self.env_step_count,
-                        update=self.update_count,
+                        update_in_epoch=updates_this_epoch,
+                        total_updates_in_epoch=total_updates_this_epoch,
                         metrics=train_result["metrics"],
                     )
 
@@ -318,11 +387,18 @@ class BlackjackRLTrainer:
         eval_metrics: dict[str, Any] | None = None
         if self.pipeline_config.evaluation.enabled and self.epoch_index % self.pipeline_config.evaluation.every_n_epochs == 0:
             eval_metrics = self.evaluate()
-            self.logger.log_evaluation(epoch=self.epoch_index, metrics=eval_metrics)
+            self.logger.log_evaluation(metrics=eval_metrics)
             best_path = self.checkpoints.save_best(self, metrics=eval_metrics)
             if best_path is not None:
                 self.best_eval_metrics = dict(eval_metrics)
-                self.logger.log_checkpoint(kind="best_eval", path=str(best_path))
+                best_metric_name = self.pipeline_config.checkpoints.best_metric_name
+                best_metric_value = float(eval_metrics[best_metric_name]) if best_metric_name in eval_metrics else None
+                self.logger.log_checkpoint(
+                    kind="best_eval",
+                    path=str(best_path),
+                    metric_name=best_metric_name,
+                    metric_value=best_metric_value,
+                )
 
         latest_path = self.checkpoints.save_latest(self, metrics=eval_metrics or epoch_summary)
         if latest_path is not None:
@@ -333,11 +409,13 @@ class BlackjackRLTrainer:
             "eval": eval_metrics,
         }
         self.training_history.append(final_summary)
-        self.logger.log_epoch_summary(epoch=self.epoch_index, summary=epoch_summary)
+        self.logger.log_epoch_summary(summary=epoch_summary)
+        self.logger.log_epoch_time(epoch_time_sec=perf_counter() - epoch_start_time)
         return final_summary
 
     def train(self) -> dict[str, Any]:
         history: list[dict[str, Any]] = []
+        self.logger.log_run_summary(summary=self.build_run_summary())
         for _ in range(self.pipeline_config.trainer.total_epochs):
             history.append(self.train_one_epoch())
         return {

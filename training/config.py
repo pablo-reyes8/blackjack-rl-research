@@ -116,14 +116,17 @@ class CheckpointConfig:
 @dataclass(slots=True)
 class PrintConfig:
     enable: bool = True
-    print_update_interval: int = 50
-    print_collection_interval: int = 100
+    print_run_summary: bool = True
+    print_warmup_interval: int = 200
+    print_update_interval: int = 100
+    print_collection_interval: int = 500
+    print_epoch_header: bool = True
     print_epoch_summary: bool = True
     print_eval_summary: bool = True
     include_segment_details: bool = False
 
     def __post_init__(self) -> None:
-        if self.print_update_interval <= 0 or self.print_collection_interval <= 0:
+        if self.print_warmup_interval <= 0 or self.print_update_interval <= 0 or self.print_collection_interval <= 0:
             raise ValueError("print intervals must be positive")
 
 
