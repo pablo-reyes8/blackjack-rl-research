@@ -49,6 +49,8 @@ BASE_SPEC: dict[str, Any] = {
         "encoder_profile": "table_realistic_default",
         "activation": "relu",
         "use_layer_norm": True,
+        "use_phase_adapters": True,
+        "use_module_gating": True,
         "dropout": 0.0,
         "feedforward_hidden_dims": [256, 256],
         "projection_dim": 256,
@@ -77,6 +79,11 @@ BASE_SPEC: dict[str, Any] = {
                 "validate_current_actions": True,
                 "validate_next_action_mask": True,
                 "allow_terminal_without_legal_next_action": True,
+                "phase_weights": {
+                    "enabled": True,
+                    "betting_weight": 1.5,
+                    "playing_weight": 1.0,
+                },
             },
         },
         "replay_buffer": {
@@ -86,11 +93,23 @@ BASE_SPEC: dict[str, Any] = {
             "sequence_length": 8,
             "min_sequence_length": 2,
         },
+        "n_step": {
+            "enabled": False,
+            "n_steps": 3,
+        },
         "epsilon": {
-            "start": 1.0,
-            "end": 0.05,
-            "decay_steps": 25_000,
-            "evaluation_epsilon": 0.0,
+            "betting": {
+                "start": 1.0,
+                "end": 0.10,
+                "decay_steps": 40_000,
+                "evaluation_epsilon": 0.0,
+            },
+            "playing": {
+                "start": 1.0,
+                "end": 0.03,
+                "decay_steps": 25_000,
+                "evaluation_epsilon": 0.0,
+            },
         },
         "optimization": {
             "optimizer": "adam",
@@ -148,7 +167,7 @@ AB_1 = _make_spec(
         "slug": "feedforward_mse_minimal",
         "entrypoint": "ab_1_feedforward_mse.py",
         "title": "Feedforward + MSE + minimal observation",
-        "description": "Removes recurrence and temporal context to test how much performance depends on sequence memory and a robust TD loss.",
+        "description": "Removes recurrence and temporal context to test how much performance depends on sequence memory and a robust TD loss, while keeping the current phase-aware betting/play stack.",
         "changes": [
             "Feedforward Double DQN instead of a recurrent policy.",
             "Minimal basic-strategy-style observation profile.",
@@ -184,7 +203,7 @@ AB_2 = _make_spec(
         "slug": "gru_huber_realistic",
         "entrypoint": "ab_2_gru_huber.py",
         "title": "GRU + Huber + realistic table context",
-        "description": "Sequence-aware baseline under realistic partial observability. This is the reference point for the rest of the ablation suite.",
+        "description": "Sequence-aware baseline under realistic partial observability using the current phase-aware betting/play pipeline. This is the reference point for the rest of the ablation suite.",
         "changes": [
             "GRU-based recurrent Double DQN.",
             "Realistic partial-observation encoder profile.",
@@ -201,7 +220,7 @@ AB_3 = _make_spec(
         "slug": "lstm_huber_realistic",
         "entrypoint": "ab_3_lstm_huber.py",
         "title": "LSTM + Huber + realistic table context",
-        "description": "Controlled GRU-vs-LSTM comparison under the same observation regime and loss, isolating recurrent cell choice.",
+        "description": "Controlled GRU-vs-LSTM comparison under the same observation regime and loss, isolating recurrent cell choice inside the current phase-aware stack.",
         "changes": [
             "LSTM recurrent backbone instead of GRU.",
             "Same realistic partial-observation profile as the recurrent baseline.",
@@ -221,7 +240,7 @@ AB_4 = _make_spec(
         "slug": "dueling_gru_soft_target",
         "entrypoint": "ab_4_dueling_gru_soft.py",
         "title": "Dueling GRU + soft targets + AdamW",
-        "description": "Tests whether a stronger value/advantage decomposition plus smoother target tracking improves stability under realistic partial observability.",
+        "description": "Tests whether a stronger value/advantage decomposition plus smoother target tracking improves stability under realistic partial observability in the current betting-plus-play setting.",
         "changes": [
             "Dueling recurrent GRU architecture.",
             "Soft target updates instead of periodic hard copies.",
@@ -252,7 +271,7 @@ AB_5 = _make_spec(
         "slug": "gru_mse_unknown_progress",
         "entrypoint": "ab_5_unknown_progress_mse.py",
         "title": "GRU + MSE + unknown shoe progress",
-        "description": "Pushes the agent into a harder uncertainty regime where shoe progress is hidden, while also swapping to MSE and softer target updates.",
+        "description": "Pushes the agent into a harder uncertainty regime where shoe progress is hidden, while also swapping to MSE and softer target updates in the phase-aware stack.",
         "changes": [
             "Unknown-progress start state with hidden reshuffle progress.",
             "Table-realistic unknown-progress observation profile.",
@@ -299,7 +318,7 @@ AB_6 = _make_spec(
         "slug": "dueling_lstm_fully_observable",
         "entrypoint": "ab_6_fully_observable_dueling.py",
         "title": "Dueling LSTM + fully observable simulator",
-        "description": "Upper-bound style ablation that gives the agent the richest observation regime together with a dueling LSTM backbone and softer optimization choices.",
+        "description": "Upper-bound style ablation that gives the agent the richest observation regime together with a dueling LSTM backbone and softer optimization choices inside the current phase-aware stack.",
         "changes": [
             "Dueling recurrent LSTM architecture.",
             "Fully observable simulator profile with exact shoe composition.",
@@ -319,7 +338,12 @@ AB_6 = _make_spec(
         },
         "training": {
             "epsilon": {
-                "end": 0.02,
+                "betting": {
+                    "end": 0.05,
+                },
+                "playing": {
+                    "end": 0.02,
+                },
             },
             "optimization": {
                 "optimizer": "adamw",

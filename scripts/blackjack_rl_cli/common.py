@@ -291,6 +291,9 @@ def summarize_setup(setup: Mapping[str, Any]) -> dict[str, Any]:
         "training": asdict(setup["pipeline_config"]),
         "derived": {
             "state_dim": int(model.state_dim),
+            "num_actions": int(getattr(model, "num_actions", 0)),
+            "num_bet_actions": int(getattr(model, "num_bet_actions", 0)),
+            "num_play_actions": int(getattr(model, "num_play_actions", 0)),
             "parameter_count": int(parameter_count),
             "trainable_parameter_count": int(trainable_parameter_count),
         },

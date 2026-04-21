@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from pathlib import Path
 import random
 import sys
@@ -31,7 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-envs", type=int, help="Override run.num_envs for evaluation.")
     parser.add_argument("--num-rounds", type=int, help="Override evaluation.num_rounds.")
     parser.add_argument("--max-decisions", type=int, help="Override evaluation.max_decisions.")
-    parser.add_argument("--epsilon", type=float, help="Override epsilon.evaluation_epsilon.")
+    parser.add_argument("--epsilon", type=float, help="Override both betting and playing evaluation epsilon.")
+    parser.add_argument("--betting-epsilon", type=float, help="Override evaluation epsilon for the betting phase only.")
+    parser.add_argument("--playing-epsilon", type=float, help="Override evaluation epsilon for the playing phase only.")
     parser.add_argument("--seed", type=int, help="Random seed for evaluation sampling.")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"], help="Device used for model evaluation.")
     parser.add_argument("--summary-path", help="Optional JSON file for evaluation output.")
@@ -56,7 +59,14 @@ def main() -> None:
     evaluation_seed = args.seed if args.seed is not None else checkpoint_pipeline.trainer.seed + 1000
     num_rounds = args.num_rounds if args.num_rounds is not None else checkpoint_pipeline.evaluation.num_rounds
     max_decisions = args.max_decisions if args.max_decisions is not None else checkpoint_pipeline.evaluation.max_decisions
-    epsilon = args.epsilon if args.epsilon is not None else checkpoint_pipeline.epsilon
+    epsilon = deepcopy(checkpoint_pipeline.epsilon)
+    if args.epsilon is not None:
+        epsilon.betting.evaluation_epsilon = args.epsilon
+        epsilon.playing.evaluation_epsilon = args.epsilon
+    if args.betting_epsilon is not None:
+        epsilon.betting.evaluation_epsilon = args.betting_epsilon
+    if args.playing_epsilon is not None:
+        epsilon.playing.evaluation_epsilon = args.playing_epsilon
 
     metrics = evaluate_policy(
         envs=setup["envs"],
@@ -74,7 +84,10 @@ def main() -> None:
         "device": str(device),
         "evaluation": {
             "seed": evaluation_seed,
-            "epsilon": epsilon,
+            "epsilon": {
+                "betting": epsilon.betting.evaluation_epsilon,
+                "playing": epsilon.playing.evaluation_epsilon,
+            },
             "num_rounds": num_rounds,
             "max_decisions": max_decisions,
             "metrics": metrics,

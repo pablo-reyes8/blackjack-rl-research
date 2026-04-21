@@ -149,7 +149,7 @@ blackjack-describe --experiment-config configs/experiments/smoke-test.yaml
 If you prefer direct script execution instead of installed console commands:
 
 ```bash
-python scripts/describe_setup.py --experiment-config configs/experiments/smoke-test.yaml
+python scripts/blackjack_rl_cli/describe_setup.py --experiment-config configs/experiments/smoke-test.yaml
 ```
 
 ### 2. Run a smoke training job
@@ -205,6 +205,12 @@ blackjack-describe --experiment-config configs/experiments/recurrent-table-defau
 blackjack-train --experiment-config configs/experiments/feedforward-basic.yaml
 ```
 
+Direct script execution:
+
+```bash
+python scripts/blackjack_rl_cli/train.py --experiment-config configs/experiments/feedforward-basic.yaml
+```
+
 ### Override the number of environments or the output directory
 
 ```bash
@@ -232,6 +238,16 @@ blackjack-evaluate \
   --num-rounds 500 \
   --max-decisions 20000 \
   --device auto
+```
+
+Phase-specific evaluation override example:
+
+```bash
+blackjack-evaluate \
+  --experiment-config configs/experiments/recurrent-table-default.yaml \
+  --checkpoint outputs/recurrent-table-default/latest.pt \
+  --betting-epsilon 0.05 \
+  --playing-epsilon 0.00
 ```
 
 
@@ -279,6 +295,14 @@ while not response["done"]:
 
 The repository includes a self-contained ablation suite under `scripts/ablations/`.
 
+All ablations now inherit the current phase-aware training stack unless they explicitly override it:
+
+- separate betting and playing heads
+- dual epsilon exploration by phase
+- phase adapters and module gating enabled by default
+- phase-weighted TD loss enabled by default
+- optional `n_step` support available in the config, but disabled by default in the shipped ablation suite
+
 Design goals of this folder:
 
 - each ablation has its own runnable CLI
@@ -301,23 +325,23 @@ Each directory stores the checkpoints plus a `run_summary.json` file that can la
 
 | Ablation | Script | Main setup |
 | --- | --- | --- |
-| `ab_1` | `python scripts/ablations/ab_1_feedforward_mse.py` | Feedforward Double DQN, minimal observation profile, MSE loss, hard targets |
-| `ab_2` | `python scripts/ablations/ab_2_gru_huber.py` | GRU recurrent Double DQN, realistic partial observation, Huber loss, hard targets |
+| `ab_1` | `python scripts/ablations/ab_1_feedforward_mse.py` | Feedforward Double DQN, minimal observation profile, MSE loss, hard targets, current phase-aware defaults |
+| `ab_2` | `python scripts/ablations/ab_2_gru_huber.py` | GRU recurrent Double DQN, realistic partial observation, Huber loss, hard targets, current phase-aware defaults |
 | `ab_3` | `python scripts/ablations/ab_3_lstm_huber.py` | LSTM recurrent Double DQN, same realistic partial observation, Huber loss, hard targets |
 | `ab_4` | `python scripts/ablations/ab_4_dueling_gru_soft.py` | Dueling GRU, realistic partial observation, AdamW, dropout, soft targets |
 | `ab_5` | `python scripts/ablations/ab_5_unknown_progress_mse.py` | GRU, unknown shoe progress, MSE loss, longer replay sequences, soft targets |
-| `ab_6` | `python scripts/ablations/ab_6_fully_observable_dueling.py` | Dueling LSTM, fully observable simulator profile, AdamW, soft targets |
+| `ab_6` | `python scripts/ablations/ab_6_fully_observable_dueling.py` | Dueling LSTM, fully observable simulator profile, AdamW, softer exploration targets |
 
 ### What each ablation is testing
 
 | Ablation | Main question |
 | --- | --- |
-| `ab_1` | How much performance survives when both recurrence and temporal table context are removed? |
-| `ab_2` | What does a strong but standard recurrent baseline look like under realistic table observations? |
-| `ab_3` | GRU vs LSTM under the same realistic partially observable regime |
+| `ab_1` | How much performance survives when both recurrence and temporal table context are removed while keeping the betting-plus-play pipeline intact? |
+| `ab_2` | What does a strong recurrent baseline look like under realistic table observations with the current phase-aware stack? |
+| `ab_3` | GRU vs LSTM under the same realistic partially observable regime and same betting/play pipeline |
 | `ab_4` | Does dueling decomposition plus soft targets improve stability under realistic table play? |
 | `ab_5` | How robust is the agent when shoe progress is hidden and training uses a harsher MSE objective? |
-| `ab_6` | What happens when a stronger model receives near upper-bound simulator visibility? |
+| `ab_6` | What happens when a stronger model receives near upper-bound simulator visibility and slightly more aggressive phase-specific exploration? |
 
 ### Run one ablation
 
@@ -362,11 +386,12 @@ python scripts/ablations/compare.py
 
 By default, the comparison ranks ablations by `ev_per_1000_hands` using the best available evaluation metrics from each `run_summary.json`.
 
-You can also compare using another metric:
+You can also compare using another metric. Dot-path access is supported for nested metrics:
 
 ```bash
 python scripts/ablations/compare.py --metric reward_per_round
 python scripts/ablations/compare.py --metric loss_rate --lower-is-better
+python scripts/ablations/compare.py --metric bet_action_frequencies.bet_2x
 ```
 
 The comparison summary is written to:
@@ -495,7 +520,7 @@ docker run --rm blackjack-rl \
 Run the test suite locally:
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"
+python -m pytest tests -q
 ```
 
 GitHub Actions is configured in `.github/workflows/ci.yml` and currently does the following:

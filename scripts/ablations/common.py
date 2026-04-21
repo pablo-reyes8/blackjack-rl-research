@@ -227,7 +227,11 @@ def build_run_all_parser() -> argparse.ArgumentParser:
 
 def build_compare_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare finished ablation runs from scripts/ablations/ab_*/run_summary.json.")
-    parser.add_argument("--metric", default="ev_per_1000_hands", help="Metric key used to rank ablations.")
+    parser.add_argument(
+        "--metric",
+        default="ev_per_1000_hands",
+        help="Metric key used to rank ablations. Supports dot-path access like 'bet_action_frequencies.bet_2x'.",
+    )
     parser.add_argument("--lower-is-better", action="store_true", help="Sort ascending instead of descending.")
     parser.add_argument("--summary-name", default="run_summary.json", help="Summary file name expected inside each ablation directory.")
     return parser
@@ -254,6 +258,9 @@ def build_ablation_payload(spec: dict[str, Any], output_dir: Path) -> dict[str, 
         "training": pipeline_config,
         "derived": {
             "state_dim": model.state_dim,
+            "num_actions": getattr(model, "num_actions", None),
+            "num_bet_actions": getattr(model, "num_bet_actions", None),
+            "num_play_actions": getattr(model, "num_play_actions", None),
             "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
         },
     }
@@ -307,6 +314,17 @@ def _extract_comparison_metrics(summary: dict[str, Any]) -> dict[str, Any]:
     return final_epoch
 
 
+def _resolve_metric_path(metrics: dict[str, Any], metric_path: str) -> float | int | None:
+    current: Any = metrics
+    for part in metric_path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    if isinstance(current, (int, float)):
+        return current
+    return None
+
+
 def collect_comparison_payload(metric: str, *, lower_is_better: bool = False, summary_name: str = "run_summary.json") -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     missing: list[dict[str, str]] = []
@@ -321,12 +339,13 @@ def collect_comparison_payload(metric: str, *, lower_is_better: bool = False, su
             summary = json.load(handle)
 
         metrics = _extract_comparison_metrics(summary)
+        metric_value = _resolve_metric_path(metrics, metric)
         records.append(
             {
                 "id": spec["id"],
                 "title": spec["title"],
                 "metric": metric,
-                "metric_value": metrics.get(metric),
+                "metric_value": metric_value,
                 "best_eval_metrics": metrics,
                 "checkpoint_dir": summary.get("result", {}).get("checkpoint_dir"),
                 "summary_path": str(summary_path),

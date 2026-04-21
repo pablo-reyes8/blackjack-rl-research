@@ -28,8 +28,13 @@ class BlackjackCliConfigTests(unittest.TestCase):
 
             self.assertGreaterEqual(summary["run"]["num_envs"], 1)
             self.assertGreater(summary["derived"]["state_dim"], 0)
+            self.assertEqual(summary["derived"]["num_actions"], 10)
+            self.assertEqual(summary["derived"]["num_bet_actions"], 4)
+            self.assertEqual(summary["derived"]["num_play_actions"], 6)
             self.assertGreater(summary["derived"]["parameter_count"], 0)
             self.assertIn(summary["model"]["architecture"], {"feedforward", "recurrent", "dueling_recurrent"})
+            self.assertIn("betting", summary["training"]["epsilon"])
+            self.assertIn("playing", summary["training"]["epsilon"])
 
     def test_smoke_preset_runs_end_to_end_from_yaml(self) -> None:
         experiment = load_experiment_config(self.experiments_dir / "smoke-test.yaml")
