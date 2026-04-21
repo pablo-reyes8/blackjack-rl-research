@@ -9,20 +9,48 @@ from typing import Any, Sequence
 
 CARD_RANKS = ("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
 TEN_VALUE_RANKS = {"10", "J", "Q", "K"}
-ACTION_ORDER = ("stand", "hit", "double", "split", "surrender", "insurance")
+BET_ACTION_ORDER = ("bet_1x", "bet_2x", "bet_3x", "bet_4x")
+PLAYING_ACTION_ORDER = ("stand", "hit", "double", "split", "surrender", "insurance")
+ACTION_ORDER = BET_ACTION_ORDER + PLAYING_ACTION_ORDER
+BET_ACTION_MULTIPLIERS = {action_name: index + 1 for index, action_name in enumerate(BET_ACTION_ORDER)}
+SUPPORTED_BET_MULTIPLIERS = tuple(BET_ACTION_MULTIPLIERS[action_name] for action_name in BET_ACTION_ORDER)
 VALID_RANKS = set(CARD_RANKS)
 
 
 class Action(IntEnum):
-    STAND = 0
-    HIT = 1
-    DOUBLE = 2
-    SPLIT = 3
-    SURRENDER = 4
-    INSURANCE = 5
+    BET_1X = 0
+    BET_2X = 1
+    BET_3X = 2
+    BET_4X = 3
+    STAND = 4
+    HIT = 5
+    DOUBLE = 6
+    SPLIT = 7
+    SURRENDER = 8
+    INSURANCE = 9
 
 
 ACTION_ALIASES = {
+    "bet_1x": "bet_1x",
+    "bet1": "bet_1x",
+    "1x": "bet_1x",
+    "apostar_1x": "bet_1x",
+    "apostar1": "bet_1x",
+    "bet_2x": "bet_2x",
+    "bet2": "bet_2x",
+    "2x": "bet_2x",
+    "apostar_2x": "bet_2x",
+    "apostar2": "bet_2x",
+    "bet_3x": "bet_3x",
+    "bet3": "bet_3x",
+    "3x": "bet_3x",
+    "apostar_3x": "bet_3x",
+    "apostar3": "bet_3x",
+    "bet_4x": "bet_4x",
+    "bet4": "bet_4x",
+    "4x": "bet_4x",
+    "apostar_4x": "bet_4x",
+    "apostar4": "bet_4x",
     "stand": "stand",
     "plant": "stand",
     "plantarse": "stand",
@@ -164,6 +192,7 @@ class HandState:
     bet: float
     doubled: bool = False
     from_split: bool = False
+    split_depth: int = 0
     split_aces: bool = False
     closed: bool = False
     surrendered: bool = False
@@ -190,14 +219,17 @@ class Shoe:
     n_decks: int
     penetration: float
     rng: random.Random = field(default_factory=random.Random)
+    use_cut_card: bool = False
     standard_total_cards: int = field(init=False)
     total_cards: int = field(init=False)
     cards: deque[str] = field(init=False)
+    cut_card_reached: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self.standard_total_cards = 52 * self.n_decks
         self.total_cards = self.standard_total_cards
         self.cards = deque()
+        self.cut_card_reached = False
         self.shuffle()
 
     @property
@@ -209,15 +241,24 @@ class Shoe:
         self.rng.shuffle(cards)
         self.cards = deque(cards)
         self.total_cards = self.standard_total_cards
+        self.cut_card_reached = False
 
     def draw(self) -> str:
         if not self.cards:
             raise RuntimeError("The shoe is empty. Reshuffle before drawing again.")
-        return self.cards.popleft()
+        card = self.cards.popleft()
+        if self.use_cut_card and not self.cut_card_reached and self.remaining_cards <= self._minimum_remaining_cards():
+            self.cut_card_reached = True
+        return card
 
     def should_reshuffle(self) -> bool:
+        if self.use_cut_card:
+            return self.cut_card_reached
         minimum_remaining = int(self.total_cards * (1 - self.penetration))
         return self.remaining_cards <= minimum_remaining
+
+    def _minimum_remaining_cards(self) -> int:
+        return int(self.total_cards * (1 - self.penetration))
 
     def composition(self) -> dict[str, int]:
         counts = Counter(self.cards)
@@ -228,3 +269,4 @@ class Shoe:
         validate_shoe_cards(cards, n_decks=self.n_decks, total_cards=normalized_total)
         self.cards = deque(cards)
         self.total_cards = normalized_total
+        self.cut_card_reached = self.use_cut_card and self.remaining_cards <= self._minimum_remaining_cards()

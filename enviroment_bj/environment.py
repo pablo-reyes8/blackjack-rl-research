@@ -9,6 +9,7 @@ from typing import Any
 from .config import BlackjackConfig, ObservationConfig, StartStateConfig
 from .core import (
     ACTION_ORDER,
+    BET_ACTION_MULTIPLIERS,
     CARD_RANKS,
     HandState,
     Shoe,
@@ -26,13 +27,18 @@ VISIBLE_TABLE_RULES = {
     "blackjack_payout",
     "double_allowed_on",
     "double_after_split_allowed",
+    "double_split_aces_allowed",
     "split_rule",
     "max_hands_after_split",
+    "max_split_depth_per_hand",
     "resplit_aces_allowed",
     "hit_split_aces_allowed",
     "surrender_allowed",
     "insurance_allowed",
+    "six_card_charlie_enabled",
     "base_bet",
+    "bet_multipliers",
+    "use_cut_card",
 }
 HIDDEN_TABLE_RULES = {"dealer_peeks_for_blackjack", "n_decks", "shoe_penetration", "reward_mode"}
 LOW_RANKS = {"2", "3", "4", "5", "6"}
@@ -54,7 +60,9 @@ class BlackjackEnvironment:
             n_decks=self.config.n_decks,
             penetration=self.config.shoe_penetration,
             rng=self._rng,
+            use_cut_card=self.config.use_cut_card,
         )
+        self._build_bet_action_cache()
         self._build_table_rule_caches()
         self.round_index = 0
         self._reshuffle_pending = False
@@ -86,6 +94,13 @@ class BlackjackEnvironment:
         self._reset_observed_card_caches()
         self._start_new_shoe_tracking(reason="initial_shoe", record_action=False)
 
+    def _build_bet_action_cache(self) -> None:
+        self._available_bet_multipliers = tuple(self.config.bet_multipliers)
+        self._bet_amount_by_action = {
+            f"bet_{multiplier}x": self.config.base_bet * float(multiplier)
+            for multiplier in self._available_bet_multipliers
+        }
+
     def _build_table_rule_caches(self) -> None:
         full_rules = {
             "n_decks": self.config.n_decks,
@@ -95,13 +110,18 @@ class BlackjackEnvironment:
             "dealer_peeks_for_blackjack": self.config.dealer_peeks_for_blackjack,
             "double_allowed_on": self.config.double_allowed_on,
             "double_after_split_allowed": self.config.double_after_split_allowed,
+            "double_split_aces_allowed": self.config.double_split_aces_allowed,
             "split_rule": self.config.split_rule,
             "max_hands_after_split": self.config.max_hands_after_split,
+            "max_split_depth_per_hand": self.config.max_split_depth_per_hand,
             "resplit_aces_allowed": self.config.resplit_aces_allowed,
             "hit_split_aces_allowed": self.config.hit_split_aces_allowed,
             "surrender_allowed": self.config.surrender_allowed,
             "insurance_allowed": self.config.insurance_allowed,
+            "six_card_charlie_enabled": self.config.six_card_charlie_enabled,
             "base_bet": self.config.base_bet,
+            "bet_multipliers": self._available_bet_multipliers,
+            "use_cut_card": self.config.use_cut_card,
             "reward_mode": "round_end",
         }
         self._cached_full_table_rules = full_rules
@@ -139,6 +159,7 @@ class BlackjackEnvironment:
         self.player_hands: list[HandState] = []
         self.dealer_cards: list[str] = []
         self.current_hand_index: int | None = None
+        self.decision_phase = "betting"
         self.round_over = False
         self.round_reward = 0.0
         self.insurance_bet = 0.0
@@ -194,44 +215,22 @@ class BlackjackEnvironment:
         self.round_index += 1
         self.total_rounds_played += 1
         self.rounds_since_shuffle += 1
-        self.total_player_hands_seen += 1
-        self.player_hands_seen_since_shuffle += 1
-        self.total_dealer_hands_seen += 1
-        self.dealer_hands_seen_since_shuffle += 1
-
-        drawn_cards: list[dict[str, Any]] = []
-        player_first = self._draw_card("player", drawn_cards, hand_index=0, visible=True, public_source="player")
-        dealer_upcard = self._draw_card(
-            "dealer_upcard",
-            drawn_cards,
-            visible=True,
-            public_source="dealer_upcard",
-        )
-        player_second = self._draw_card("player", drawn_cards, hand_index=0, visible=True, public_source="player")
-        dealer_hole = self._draw_card("dealer_hole", drawn_cards, visible=False)
-
-        self.player_hands = [HandState(cards=[player_first, player_second], bet=self.config.base_bet)]
-        self.dealer_cards = [dealer_upcard, dealer_hole]
-        self.current_hand_index = 0
-
         self._record_public_action(
             public_actions_added,
             actor="table",
-            action="deal_round",
-            player_hands=1,
-            dealer_upcard=dealer_upcard,
+            action="reset_to_betting",
+            available_bet_multipliers=list(self._available_bet_multipliers),
         )
-        self._apply_initial_table_rules(drawn_cards, public_actions_added)
 
-        response = self._build_response(action_name="deal", reward=self.round_reward if self.round_over else 0.0)
+        response = self._build_response(action_name="reset_to_betting", reward=0.0)
         self._record_transition(
-            action_name="deal",
+            action_name="reset_to_betting",
             observation_before=None,
             public_state_before=None,
             action_mask_before=None,
             action_mask_by_name_before=None,
             response=response,
-            drawn_cards=drawn_cards,
+            drawn_cards=[],
             public_actions_added=public_actions_added,
         )
         return response
@@ -252,6 +251,59 @@ class BlackjackEnvironment:
         if self.start_state.clear_visible_histories_after_burn:
             self._clear_public_histories_after_hidden_burn()
         self._start_state_prepared = True
+
+    def _deal_round_after_bet(
+        self,
+        *,
+        action_name: str,
+        initial_bet: float,
+        drawn_cards: list[dict[str, Any]],
+        public_actions_added: list[dict[str, Any]],
+    ) -> None:
+        if self.decision_phase != "betting":
+            raise RuntimeError("The round is not waiting for a bet.")
+        if self.shoe.remaining_cards < 4:
+            raise RuntimeError("The shoe does not contain enough cards to deal after the bet.")
+
+        self.total_player_hands_seen += 1
+        self.player_hands_seen_since_shuffle += 1
+        self.total_dealer_hands_seen += 1
+        self.dealer_hands_seen_since_shuffle += 1
+
+        bet_multiplier = BET_ACTION_MULTIPLIERS[action_name]
+        self._record_public_action(
+            public_actions_added,
+            actor="player",
+            action=action_name,
+            multiplier=bet_multiplier,
+            amount=initial_bet,
+        )
+
+        player_first = self._draw_card("player", drawn_cards, hand_index=0, visible=True, public_source="player")
+        dealer_upcard = self._draw_card(
+            "dealer_upcard",
+            drawn_cards,
+            visible=True,
+            public_source="dealer_upcard",
+        )
+        player_second = self._draw_card("player", drawn_cards, hand_index=0, visible=True, public_source="player")
+        dealer_hole = self._draw_card("dealer_hole", drawn_cards, visible=False)
+
+        self.player_hands = [HandState(cards=[player_first, player_second], bet=initial_bet)]
+        self.dealer_cards = [dealer_upcard, dealer_hole]
+        self.current_hand_index = 0
+        self.decision_phase = "playing"
+
+        self._record_public_action(
+            public_actions_added,
+            actor="table",
+            action="deal_round",
+            player_hands=1,
+            dealer_upcard=dealer_upcard,
+            initial_bet=initial_bet,
+            bet_multiplier=bet_multiplier,
+        )
+        self._apply_initial_table_rules(drawn_cards, public_actions_added)
 
     def _burn_hidden_rounds(self, n_rounds: int) -> None:
         for _ in range(n_rounds):
@@ -335,9 +387,38 @@ class BlackjackEnvironment:
         if not action_mask_by_name_before.get(action_name, False):
             raise ValueError(f"Illegal action '{action_name}' for the current state")
 
-        current_hand = self._current_hand()
         drawn_cards: list[dict[str, Any]] = []
         public_actions_added: list[dict[str, Any]] = []
+
+        if self.decision_phase == "betting":
+            initial_bet = self._bet_amount_by_action.get(action_name)
+            if initial_bet is None:
+                raise ValueError(f"Unsupported betting action '{action_name}'")
+
+            self._deal_round_after_bet(
+                action_name=action_name,
+                initial_bet=initial_bet,
+                drawn_cards=drawn_cards,
+                public_actions_added=public_actions_added,
+            )
+            reward = self.round_reward if self.round_over else 0.0
+            response = self._build_response(action_name=action_name, reward=reward)
+            self._record_transition(
+                action_name=action_name,
+                observation_before=observation_before,
+                public_state_before=public_state_before,
+                action_mask_before=action_mask_before,
+                action_mask_by_name_before=action_mask_by_name_before,
+                response=response,
+                drawn_cards=drawn_cards,
+                public_actions_added=public_actions_added,
+            )
+            return response
+
+        if self.decision_phase != "playing":
+            raise RuntimeError(f"Unsupported decision phase '{self.decision_phase}'")
+
+        current_hand = self._current_hand()
 
         if self.insurance_offer_active and action_name != "insurance":
             self.insurance_offer_active = False
@@ -371,7 +452,9 @@ class BlackjackEnvironment:
                 return response
 
         if action_name == "insurance":
-            self.insurance_bet = self.config.base_bet * 0.5
+            if current_hand is None:
+                raise RuntimeError("No active hand is available.")
+            self.insurance_bet = current_hand.bet * 0.5
             self.insurance_offer_active = False
             self._record_public_action(public_actions_added, actor="player", action="insurance", bet=self.insurance_bet)
 
@@ -450,7 +533,11 @@ class BlackjackEnvironment:
                 hand_index=self.current_hand_index,
                 card=card,
             )
-            if current_hand.is_bust():
+            if self._is_six_card_charlie(current_hand):
+                current_hand.closed = True
+                current_hand.close_reason = "six_card_charlie"
+                self._advance_round_flow(drawn_cards, public_actions_added)
+            elif current_hand.is_bust():
                 current_hand.closed = True
                 current_hand.close_reason = "bust"
                 self._advance_round_flow(drawn_cards, public_actions_added)
@@ -517,6 +604,14 @@ class BlackjackEnvironment:
         if self.round_over:
             return legal
 
+        if self.decision_phase == "betting":
+            for action_name in self._bet_amount_by_action:
+                legal[action_name] = True
+            return legal
+
+        if self.decision_phase != "playing":
+            raise RuntimeError(f"Unsupported decision phase '{self.decision_phase}'")
+
         hand = self._current_hand()
         if hand is None:
             return legal
@@ -548,6 +643,12 @@ class BlackjackEnvironment:
             "dealer_upcard": self.dealer_cards[0] if self.dealer_cards else None,
         }
 
+        if obs_cfg.obs_include_decision_phase:
+            observation["decision_phase"] = self.decision_phase
+
+        if obs_cfg.obs_include_available_bet_multipliers:
+            observation["available_bet_multipliers"] = list(self._available_bet_multipliers)
+
         if self.dealer_cards:
             observation["dealer_upcard_value"] = rank_value(self.dealer_cards[0])
         else:
@@ -563,6 +664,14 @@ class BlackjackEnvironment:
 
         if obs_cfg.obs_include_current_bet:
             observation["current_bet"] = hand.bet if hand is not None else None
+
+        if obs_cfg.obs_include_betting_context:
+            observation["betting_context"] = {
+                "decision_phase": self.decision_phase,
+                "available_bet_multipliers": list(self._available_bet_multipliers),
+                "can_place_bet": self.decision_phase == "betting" and not self.round_over,
+                "current_bet": hand.bet if hand is not None else None,
+            }
 
         if obs_cfg.obs_include_hand_context:
             observation["hand_context"] = {
@@ -662,8 +771,11 @@ class BlackjackEnvironment:
         current_hand = self._current_hand()
         return {
             "round_index": self.round_index,
+            "decision_phase": self.decision_phase,
             "round_over": self.round_over,
             "round_reward": self.round_reward,
+            "current_bet": current_hand.bet if current_hand is not None else None,
+            "available_bet_multipliers": list(self._available_bet_multipliers),
             "current_hand_index": self.current_hand_index,
             "current_hand": self._serialize_hand(current_hand, self.current_hand_index) if current_hand is not None else None,
             "player_hands": [self._serialize_hand(hand, index) for index, hand in enumerate(self.player_hands)],
@@ -681,6 +793,10 @@ class BlackjackEnvironment:
                     if self.shoe.total_cards
                     else 0.0
                 ),
+                "cut_card_enabled": self.config.use_cut_card,
+                "cut_card_reached": self.shoe.cut_card_reached,
+                "last_hand_before_reshuffle": self.config.use_cut_card
+                and (self.shoe.cut_card_reached or self._reshuffle_pending),
                 "reshuffle_pending": self._reshuffle_pending,
                 "reshuffled_on_reset": self._reshuffled_on_last_reset,
             },
@@ -699,9 +815,11 @@ class BlackjackEnvironment:
     def get_debug_state(self) -> dict[str, Any]:
         return {
             "round_index": self.round_index,
+            "decision_phase": self.decision_phase,
             "round_over": self.round_over,
             "current_hand_index": self.current_hand_index,
             "round_reward": self.round_reward,
+            "available_bet_multipliers": list(self._available_bet_multipliers),
             "table_rules": self.get_full_table_rules(),
             "visible_table_rules": self.get_visible_table_rules(),
             "observation_config": asdict(self.config.observation),
@@ -725,6 +843,8 @@ class BlackjackEnvironment:
                 "remaining_cards": self.shoe.remaining_cards,
                 "total_cards": self.shoe.total_cards,
                 "standard_total_cards": self.shoe.standard_total_cards,
+                "cut_card_enabled": self.config.use_cut_card,
+                "cut_card_reached": self.shoe.cut_card_reached,
                 "reshuffle_pending": self._reshuffle_pending,
                 "shuffle_count": self.shuffle_count,
                 "last_shuffle_reason": self.last_shuffle_reason,
@@ -753,6 +873,7 @@ class BlackjackEnvironment:
         info = {
             "action": action_name,
             "round_index": self.round_index,
+            "decision_phase": self.decision_phase,
             "round_over": self.round_over,
             "round_reward": self.round_reward,
             "insurance_reward": self.insurance_reward,
@@ -923,6 +1044,12 @@ class BlackjackEnvironment:
             return None
         return self.player_hands[self.current_hand_index]
 
+    def _is_six_card_charlie(self, hand: HandState) -> bool:
+        return self.config.six_card_charlie_enabled and len(hand.cards) >= 6 and hand.total() <= 21
+
+    def _hand_needs_dealer_resolution(self, hand: HandState) -> bool:
+        return not hand.is_bust() and not hand.surrendered and not self._is_six_card_charlie(hand)
+
     def _can_hit(self, hand: HandState) -> bool:
         if hand.closed or hand.total() >= 21:
             return False
@@ -935,7 +1062,7 @@ class BlackjackEnvironment:
             return False
         if hand.from_split and not self.config.double_after_split_allowed:
             return False
-        if hand.split_aces and not self.config.hit_split_aces_allowed:
+        if hand.split_aces and not self.config.double_split_aces_allowed:
             return False
 
         total, is_soft = hand_value(hand.cards)
@@ -951,6 +1078,11 @@ class BlackjackEnvironment:
         if hand.closed or hand.action_count > 0 or len(hand.cards) != 2:
             return False
         if len(self.player_hands) >= self.config.max_hands_after_split:
+            return False
+        if (
+            self.config.max_split_depth_per_hand is not None
+            and hand.split_depth >= self.config.max_split_depth_per_hand
+        ):
             return False
         if hand.split_aces and not self.config.resplit_aces_allowed:
             return False
@@ -999,12 +1131,14 @@ class BlackjackEnvironment:
             cards=[left, first_card],
             bet=hand.bet,
             from_split=True,
+            split_depth=hand.split_depth + 1,
             split_aces=is_split_aces,
         )
         second_hand = HandState(
             cards=[right, second_card],
             bet=hand.bet,
             from_split=True,
+            split_depth=hand.split_depth + 1,
             split_aces=is_split_aces,
         )
 
@@ -1067,7 +1201,7 @@ class BlackjackEnvironment:
         return None
 
     def _should_play_dealer(self) -> bool:
-        return any(not hand.is_bust() and not hand.surrendered for hand in self.player_hands)
+        return any(self._hand_needs_dealer_resolution(hand) for hand in self.player_hands)
 
     def _finalize_round(
         self,
@@ -1157,6 +1291,8 @@ class BlackjackEnvironment:
             return -(hand.bet / 2), "surrender"
         if hand.is_bust():
             return -hand.bet, "loss"
+        if self._is_six_card_charlie(hand):
+            return hand.bet, "six_card_charlie"
         if dealer_blackjack:
             if hand.is_blackjack():
                 return 0.0, "push"
@@ -1185,9 +1321,11 @@ class BlackjackEnvironment:
             "is_soft": is_soft,
             "is_blackjack": hand.is_blackjack(),
             "is_bust": hand.is_bust(),
+            "is_six_card_charlie": self._is_six_card_charlie(hand),
             "bet": hand.bet,
             "doubled": hand.doubled,
             "from_split": hand.from_split,
+            "split_depth": hand.split_depth,
             "split_aces": hand.split_aces,
             "closed": hand.closed,
             "surrendered": hand.surrendered,
@@ -1215,6 +1353,17 @@ class BlackjackEnvironment:
         return visible_hands
 
     def _serialize_public_dealer(self) -> dict[str, Any]:
+        if not self.dealer_cards:
+            return {
+                "upcard": None,
+                "cards": [],
+                "hole_card_hidden": False,
+                "visible_total": None,
+                "visible_is_soft": None,
+                "peek_checked": self.dealer_peeked,
+                "has_blackjack": self.dealer_has_blackjack if self.round_over else None,
+            }
+
         revealed = self.dealer_revealed or self.round_over
         visible_cards = list(self.dealer_cards if revealed else self.dealer_cards[:1])
         visible_total, visible_soft = hand_value(visible_cards)

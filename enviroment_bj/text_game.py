@@ -58,11 +58,35 @@ class BlackjackTextGame:
     def insurance(self) -> str:
         return self.play("insurance")
 
+    def bet_1x(self) -> str:
+        return self.play("bet_1x")
+
+    def bet_2x(self) -> str:
+        return self.play("bet_2x")
+
+    def bet_3x(self) -> str:
+        return self.play("bet_3x")
+
+    def bet_4x(self) -> str:
+        return self.play("bet_4x")
+
     def render(self) -> RenderedText:
         if self.state is None:
             return RenderedText("No active round. Use game.new_round().")
 
         public_state = self.state["info"]["public_state"]
+        if public_state["decision_phase"] == "betting":
+            legal_actions = ", ".join(self.state["legal_actions"])
+            return RenderedText(
+                "\n".join(
+                    [
+                        f"Round {public_state['round_index']}",
+                        "Place your bet.",
+                        f"Actions: {legal_actions}",
+                    ]
+                )
+            )
+
         lines = [
             f"Round {public_state['round_index']}",
             self._format_dealer(public_state["dealer"]),

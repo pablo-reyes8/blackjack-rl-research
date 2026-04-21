@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .core import SUPPORTED_BET_MULTIPLIERS
+
 
 @dataclass(slots=True)
 class StartStateConfig:
@@ -26,9 +28,12 @@ class ObservationConfig:
     obs_include_table_rules: bool = True
     obs_include_visible_rules_only: bool = True
     obs_include_hidden_rules: bool = False
+    obs_include_decision_phase: bool = True
+    obs_include_available_bet_multipliers: bool = True
     obs_current_hand_mode: str = "table_raw"
     obs_include_other_player_hands: bool = True
     obs_include_current_bet: bool = True
+    obs_include_betting_context: bool = True
     obs_include_hand_context: bool = True
     obs_include_insurance_context: bool = True
     obs_include_temporal_context: bool = True
@@ -155,18 +160,23 @@ def _default_observation_config() -> ObservationConfig:
 class BlackjackConfig:
     n_decks: int = 6
     shoe_penetration: float = 0.8
+    use_cut_card: bool = False
     dealer_hits_soft_17: bool = False
     blackjack_payout: float = 1.5
     dealer_peeks_for_blackjack: bool = True
     double_allowed_on: str = "any_two_cards"
     double_after_split_allowed: bool = True
+    double_split_aces_allowed: bool = False
     split_rule: str = "same_value"
     max_hands_after_split: int = 4
+    max_split_depth_per_hand: int | None = None
     resplit_aces_allowed: bool = True
     hit_split_aces_allowed: bool = False
     surrender_allowed: bool = True
     insurance_allowed: bool = True
+    six_card_charlie_enabled: bool = False
     base_bet: float = 1.0
+    bet_multipliers: tuple[int, ...] = (1, 2, 3, 4)
     strict_shoe_validation: bool = False
     observation: ObservationConfig = field(default_factory=_default_observation_config)
     observation_mode: str | None = None
@@ -181,8 +191,26 @@ class BlackjackConfig:
             raise ValueError("blackjack_payout must be positive")
         if self.base_bet <= 0:
             raise ValueError("base_bet must be positive")
+        if not self.bet_multipliers:
+            raise ValueError("bet_multipliers must contain at least one multiplier")
+        if any(not isinstance(multiplier, int) or multiplier <= 0 for multiplier in self.bet_multipliers):
+            raise ValueError("bet_multipliers must contain positive integers")
+        if len(set(self.bet_multipliers)) != len(self.bet_multipliers):
+            raise ValueError("bet_multipliers must be unique")
+        if tuple(sorted(self.bet_multipliers)) != self.bet_multipliers:
+            raise ValueError("bet_multipliers must be strictly increasing")
+        unsupported_multipliers = [
+            multiplier for multiplier in self.bet_multipliers if multiplier not in SUPPORTED_BET_MULTIPLIERS
+        ]
+        if unsupported_multipliers:
+            raise ValueError(
+                "bet_multipliers currently supports only these values: "
+                + ", ".join(str(multiplier) for multiplier in SUPPORTED_BET_MULTIPLIERS)
+            )
         if self.max_hands_after_split < 2:
             raise ValueError("max_hands_after_split must be at least 2")
+        if self.max_split_depth_per_hand is not None and self.max_split_depth_per_hand <= 0:
+            raise ValueError("max_split_depth_per_hand must be positive when provided")
         if self.split_rule not in {"same_rank", "same_value"}:
             raise ValueError("split_rule must be 'same_rank' or 'same_value'")
         if self.double_allowed_on not in {

@@ -5,6 +5,7 @@ import unittest
 import torch
 
 from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConfig, StartStateConfig
+from enviroment_bj.core import ACTION_ORDER
 from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN
 
 
@@ -40,11 +41,11 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
     def build_realistic_sequences(self) -> list[list[dict]]:
         env_a = self.make_env(observation_profile="table_realistic_default")
         env_a.load_shoe(["8", "6", "8", "10", "3", "K", "2", "10"], total_cards=8)
-        seq_a = [env_a.reset(), env_a.step("split"), env_a.step("double"), env_a.step("stand")]
+        seq_a = [env_a.reset(), env_a.step("bet_1x"), env_a.step("split"), env_a.step("double"), env_a.step("stand")]
 
         env_b = self.make_env(observation_profile="table_realistic_default")
         env_b.load_shoe(["10", "6", "7", "10", "10"], total_cards=5)
-        seq_b = [env_b.reset(), env_b.step("stand")]
+        seq_b = [env_b.reset(), env_b.step("bet_1x"), env_b.step("stand")]
         return [seq_a, seq_b]
 
     def build_unknown_progress_sequences(self) -> list[list[dict]]:
@@ -59,7 +60,7 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
             observation_profile="table_realistic_unknown_progress",
             start_state=start_state,
         )
-        seq_a = [env_a.reset(), env_a.step("stand")]
+        seq_a = [env_a.reset(), env_a.step("bet_1x"), env_a.step("stand")]
 
         env_b = self.make_env(
             observation_profile="table_realistic_unknown_progress",
@@ -70,7 +71,7 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
                 hide_reshuffle_progress_from_observation=True,
             ),
         )
-        seq_b = [env_b.reset(), env_b.step("hit")]
+        seq_b = [env_b.reset(), env_b.step("bet_1x"), env_b.step("hit")]
         return [seq_a, seq_b]
 
     def test_feedforward_double_dqn_forward_and_backward(self) -> None:
@@ -82,8 +83,8 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         model.train()
         output = model(response)
 
-        self.assertEqual(tuple(output["q_values"].shape), (1, 6))
-        self.assertEqual(tuple(output["masked_q_values"].shape), (1, 6))
+        self.assertEqual(tuple(output["q_values"].shape), (1, len(ACTION_ORDER)))
+        self.assertEqual(tuple(output["masked_q_values"].shape), (1, len(ACTION_ORDER)))
         self.assertEqual(tuple(output["state_vector"].shape), (1, model.state_dim))
         self.assertTrue(torch.equal(output["action_mask"], torch.tensor(response["action_mask"], dtype=torch.bool).unsqueeze(0)))
         illegal_mask = ~output["action_mask"]
@@ -101,7 +102,7 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         output = model(sequences)
 
         self.assertEqual(tuple(output["q_values"].shape[:2]), tuple(output["padding_mask"].shape))
-        self.assertEqual(output["q_values"].shape[-1], 6)
+        self.assertEqual(output["q_values"].shape[-1], len(ACTION_ORDER))
         self.assertEqual(tuple(output["action_mask"].shape), tuple(output["q_values"].shape))
         self.assertEqual(tuple(output["state_vector"].shape[-2:]), (output["q_values"].shape[1], model.state_dim))
         self.assertEqual(tuple(output["hidden_state"].shape), (1, 2, model.config.recurrent_hidden_dim))
@@ -123,7 +124,7 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
 
         batch_output = model(sequences)
         self.assertEqual(tuple(batch_output["q_values"].shape[:2]), tuple(batch_output["padding_mask"].shape))
-        self.assertEqual(batch_output["q_values"].shape[-1], 6)
+        self.assertEqual(batch_output["q_values"].shape[-1], len(ACTION_ORDER))
         self.assertEqual(batch_output["state_value"].shape[-1], 1)
         self.assertEqual(tuple(batch_output["advantages"].shape), tuple(batch_output["q_values"].shape))
         self.assertIsInstance(batch_output["hidden_state"], tuple)
@@ -141,9 +142,9 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         step_response = single_env.reset()
         step_output = model.forward_step(step_response, hidden_state=model.init_hidden(batch_size=1))
 
-        self.assertEqual(tuple(step_output["q_values"].shape), (1, 6))
+        self.assertEqual(tuple(step_output["q_values"].shape), (1, len(ACTION_ORDER)))
         self.assertEqual(tuple(step_output["state_value"].shape), (1, 1))
-        self.assertEqual(tuple(step_output["advantages"].shape), (1, 6))
+        self.assertEqual(tuple(step_output["advantages"].shape), (1, len(ACTION_ORDER)))
         self.assertNotIn("estimated_shoe_progress", step_response["observation"]["temporal_context"])
 
         valid_steps = batch_output["padding_mask"].unsqueeze(-1).to(batch_output["q_values"].dtype)

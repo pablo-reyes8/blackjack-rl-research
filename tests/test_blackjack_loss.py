@@ -74,12 +74,14 @@ class BlackjackBellmanLossTests(unittest.TestCase):
     def build_feedforward_transition_batch(self) -> dict[str, object]:
         env_a = self.make_env(observation_profile="minimal_basic_strategy")
         env_a.load_shoe(["10", "6", "7", "10", "10"], total_cards=5)
-        state_a = env_a.reset()
+        env_a.reset()
+        state_a = env_a.step("bet_1x")
         next_a = env_a.step("stand")
 
         env_b = self.make_env(observation_profile="minimal_basic_strategy")
         env_b.load_shoe(["10", "9", "6", "7"], total_cards=4)
-        state_b = env_b.reset()
+        env_b.reset()
+        state_b = env_b.step("bet_1x")
         next_b = env_b.step("surrender")
 
         return {
@@ -105,42 +107,58 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         if not unknown_progress:
             env_a.load_shoe(["8", "6", "8", "10", "3", "K", "2", "10"], total_cards=8)
         a0 = env_a.reset()
-        a1 = env_a.step("split") if not unknown_progress else env_a.step("stand")
+        a1 = env_a.step("bet_1x")
         seq_a = []
         if not unknown_progress:
-            a2 = env_a.step("double")
-            a3 = env_a.step("stand")
+            a2 = env_a.step("split")
+            a3 = env_a.step("double")
+            a4 = env_a.step("stand")
             seq_a = [
                 {
                     "state": a0,
                     "next_state": a1,
-                    "action": ACTION_ORDER.index("split"),
+                    "action": ACTION_ORDER.index("bet_1x"),
                     "reward": a1["reward"],
                     "done": a1["done"],
                 },
                 {
                     "state": a1,
                     "next_state": a2,
-                    "action": ACTION_ORDER.index("double"),
+                    "action": ACTION_ORDER.index("split"),
                     "reward": a2["reward"],
                     "done": a2["done"],
                 },
                 {
                     "state": a2,
                     "next_state": a3,
-                    "action": ACTION_ORDER.index("stand"),
+                    "action": ACTION_ORDER.index("double"),
                     "reward": a3["reward"],
                     "done": a3["done"],
                 },
+                {
+                    "state": a3,
+                    "next_state": a4,
+                    "action": ACTION_ORDER.index("stand"),
+                    "reward": a4["reward"],
+                    "done": a4["done"],
+                },
             ]
         else:
+            a2 = env_a.step("stand")
             seq_a = [
                 {
                     "state": a0,
                     "next_state": a1,
-                    "action": ACTION_ORDER.index("stand"),
+                    "action": ACTION_ORDER.index("bet_1x"),
                     "reward": a1["reward"],
                     "done": a1["done"],
+                },
+                {
+                    "state": a1,
+                    "next_state": a2,
+                    "action": ACTION_ORDER.index("stand"),
+                    "reward": a2["reward"],
+                    "done": a2["done"],
                 }
             ]
 
@@ -158,14 +176,22 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         if not unknown_progress:
             env_b.load_shoe(["10", "6", "7", "10", "10"], total_cards=5)
         b0 = env_b.reset()
-        b1 = env_b.step("stand")
+        b1 = env_b.step("bet_1x")
+        b2 = env_b.step("stand")
         seq_b = [
             {
                 "state": b0,
                 "next_state": b1,
-                "action": ACTION_ORDER.index("stand"),
+                "action": ACTION_ORDER.index("bet_1x"),
                 "reward": b1["reward"],
                 "done": b1["done"],
+            },
+            {
+                "state": b1,
+                "next_state": b2,
+                "action": ACTION_ORDER.index("stand"),
+                "reward": b2["reward"],
+                "done": b2["done"],
             }
         ]
 
@@ -197,16 +223,17 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         }
 
     def test_feedforward_targets_use_only_legal_next_actions(self) -> None:
+        num_actions = len(ACTION_ORDER)
         online_network = FixedFeedForwardNet(
             {
-                "state": torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]),
-                "next": torch.tensor([[0.0, 100.0, 3.0, 4.0, 5.0, 6.0]]),
+                "state": torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0, 0.0, 0.0]]),
+                "next": torch.tensor([[0.0, 100.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0, 0.0, 0.0]]),
             }
         )
         target_network = FixedFeedForwardNet(
             {
-                "state": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
-                "next": torch.tensor([[10.0, 20.0, 30.0, 40.0, 50.0, 60.0]]),
+                "state": torch.zeros((1, num_actions), dtype=torch.float32),
+                "next": torch.tensor([[10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 0.0, 0.0, 0.0, 0.0]]),
             }
         )
         batch = {
@@ -215,8 +242,8 @@ class BlackjackBellmanLossTests(unittest.TestCase):
             "action": torch.tensor([2], dtype=torch.long),
             "reward": torch.tensor([1.0], dtype=torch.float32),
             "done": torch.tensor([False], dtype=torch.bool),
-            "action_mask": torch.tensor([[1, 1, 1, 1, 1, 1]], dtype=torch.bool),
-            "next_action_mask": torch.tensor([[1, 0, 1, 0, 0, 0]], dtype=torch.bool),
+            "action_mask": torch.ones((1, num_actions), dtype=torch.bool),
+            "next_action_mask": torch.tensor([[1, 0, 1, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.bool),
         }
 
         target_info = compute_double_dqn_targets_feedforward(online_network, target_network, batch, gamma=0.5)
@@ -226,16 +253,17 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         self.assertAlmostEqual(float(target_info["target"].item()), 16.0, places=6)
 
     def test_feedforward_terminal_transition_without_legal_next_action_is_finite(self) -> None:
+        num_actions = len(ACTION_ORDER)
         online_network = FixedFeedForwardNet(
             {
-                "state": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
-                "next": torch.tensor([[1000.0, -1000.0, 10.0, 20.0, 30.0, 40.0]]),
+                "state": torch.zeros((1, num_actions), dtype=torch.float32),
+                "next": torch.tensor([[1000.0, -1000.0, 10.0, 20.0, 30.0, 40.0, 0.0, 0.0, 0.0, 0.0]]),
             }
         )
         target_network = FixedFeedForwardNet(
             {
-                "state": torch.zeros((1, 6), dtype=torch.float32),
-                "next": torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]),
+                "state": torch.zeros((1, num_actions), dtype=torch.float32),
+                "next": torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0, 0.0, 0.0]]),
             }
         )
         batch = {
@@ -244,8 +272,8 @@ class BlackjackBellmanLossTests(unittest.TestCase):
             "action": torch.tensor([0], dtype=torch.long),
             "reward": torch.tensor([1_000_000.0], dtype=torch.float32),
             "done": torch.tensor([True], dtype=torch.bool),
-            "action_mask": torch.tensor([[1, 0, 0, 0, 0, 0]], dtype=torch.bool),
-            "next_action_mask": torch.zeros((1, 6), dtype=torch.bool),
+            "action_mask": torch.tensor([[1, 0, 0, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.bool),
+            "next_action_mask": torch.zeros((1, num_actions), dtype=torch.bool),
         }
 
         loss_info = compute_td_loss_feedforward(online_network, target_network, batch, gamma=0.99)
@@ -255,7 +283,8 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         self.assertEqual(float(loss_info["target"].item()), 1_000_000.0)
 
     def test_recurrent_loss_ignores_padding(self) -> None:
-        zero_q = torch.zeros((2, 3, 6), dtype=torch.float32)
+        num_actions = len(ACTION_ORDER)
+        zero_q = torch.zeros((2, 3, num_actions), dtype=torch.float32)
         online_network = FixedRecurrentNet({"state": zero_q, "next": zero_q})
         target_network = FixedRecurrentNet({"state": zero_q, "next": zero_q})
         batch = {
@@ -267,12 +296,12 @@ class BlackjackBellmanLossTests(unittest.TestCase):
             "padding_mask": torch.tensor([[True, True, False], [True, False, False]], dtype=torch.bool),
             "action_mask": torch.tensor(
                 [
-                    [[1, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]],
-                    [[1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]],
+                    [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+                    [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
                 ],
                 dtype=torch.bool,
             ),
-            "next_action_mask": torch.zeros((2, 3, 6), dtype=torch.bool),
+            "next_action_mask": torch.zeros((2, 3, num_actions), dtype=torch.bool),
         }
 
         loss_info = compute_td_loss_recurrent(online_network, target_network, batch, gamma=0.99)
@@ -282,7 +311,8 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss_info["loss_per_timestep"]).all().item())
 
     def test_recurrent_nonterminal_without_legal_next_action_raises(self) -> None:
-        zero_q = torch.zeros((1, 2, 6), dtype=torch.float32)
+        num_actions = len(ACTION_ORDER)
+        zero_q = torch.zeros((1, 2, num_actions), dtype=torch.float32)
         online_network = FixedRecurrentNet({"state": zero_q, "next": zero_q})
         target_network = FixedRecurrentNet({"state": zero_q, "next": zero_q})
         batch = {
@@ -292,8 +322,8 @@ class BlackjackBellmanLossTests(unittest.TestCase):
             "reward": torch.zeros((1, 2), dtype=torch.float32),
             "done": torch.tensor([[False, True]], dtype=torch.bool),
             "padding_mask": torch.tensor([[True, True]], dtype=torch.bool),
-            "action_mask": torch.tensor([[[1, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0]]], dtype=torch.bool),
-            "next_action_mask": torch.zeros((1, 2, 6), dtype=torch.bool),
+            "action_mask": torch.tensor([[[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]]], dtype=torch.bool),
+            "next_action_mask": torch.zeros((1, 2, num_actions), dtype=torch.bool),
         }
 
         with self.assertRaises(ValueError):

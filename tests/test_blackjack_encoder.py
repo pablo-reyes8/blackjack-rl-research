@@ -5,6 +5,7 @@ import unittest
 import torch
 
 from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConfig, StartStateConfig
+from enviroment_bj.core import ACTION_ORDER
 from model.encoder import BlackjackObservationEncoder, EncoderConfig
 
 
@@ -41,7 +42,7 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertEqual(encoded["state_vector"].dtype, torch.float32)
         self.assertEqual(encoded["action_mask"].dtype, torch.bool)
         self.assertEqual(tuple(encoded["state_vector"].shape), (encoder.state_dim,))
-        self.assertEqual(tuple(encoded["action_mask"].shape), (6,))
+        self.assertEqual(tuple(encoded["action_mask"].shape), (len(ACTION_ORDER),))
         self.assertEqual(set(encoded["module_tensors"].keys()), {"hand", "hand_context", "insurance", "rules"})
         self.assertEqual(encoded["metadata"]["profile"], "minimal_basic_strategy")
         self.assertEqual(encoded["metadata"]["observation_profile"], "minimal_basic_strategy")
@@ -52,6 +53,7 @@ class BlackjackEncoderTests(unittest.TestCase):
         encoder = BlackjackObservationEncoder.from_profile("table_realistic_default")
 
         start = env.reset()
+        env.step("bet_1x")
         split_response = env.step("split")
         encoded = encoder(split_response)
 
@@ -69,7 +71,8 @@ class BlackjackEncoderTests(unittest.TestCase):
     def test_full_encoder_includes_exact_shoe_and_hidden_rules(self) -> None:
         env = self.make_env(observation_profile="fully_observable_sim")
         env.load_shoe(["10", "6", "7", "10", "5", "2"], total_cards=6)
-        response = env.reset()
+        env.reset()
+        response = env.step("bet_1x")
         encoder = BlackjackObservationEncoder.from_profile("fully_observable_sim")
 
         encoded = encoder(response)
@@ -90,7 +93,8 @@ class BlackjackEncoderTests(unittest.TestCase):
                 hide_reshuffle_progress_from_observation=True,
             ),
         )
-        response = env.reset()
+        env.reset()
+        response = env.step("bet_1x")
         encoder = BlackjackObservationEncoder.from_profile("table_realistic_unknown_progress")
 
         encoded = encoder(response)
@@ -108,13 +112,13 @@ class BlackjackEncoderTests(unittest.TestCase):
         env = self.make_env(observation_profile="minimal_basic_strategy")
         env.load_shoe(["10", "6", "7", "10", "9", "5", "2", "10"], total_cards=8)
         first = env.reset()
-        second = env.step("stand")
+        second = env.step("bet_1x")
 
         encoder = BlackjackObservationEncoder.from_profile("minimal_basic_strategy")
         batch = encoder.encode_batch([first, second])
 
         self.assertEqual(tuple(batch["state_vector"].shape), (2, encoder.state_dim))
-        self.assertEqual(tuple(batch["action_mask"].shape), (2, 6))
+        self.assertEqual(tuple(batch["action_mask"].shape), (2, len(ACTION_ORDER)))
         self.assertEqual(tuple(batch["module_tensors"]["hand"].shape), (2, encoder.module_dims["hand"]))
         self.assertEqual(batch["metadata"]["batch_size"], 2)
 
@@ -123,22 +127,24 @@ class BlackjackEncoderTests(unittest.TestCase):
 
         env_a = self.make_env(observation_profile="minimal_basic_strategy")
         env_a.load_shoe(["10", "6", "7", "10", "9", "5", "2", "10"], total_cards=8)
-        seq_a = [env_a.reset(), env_a.step("stand")]
+        seq_a = [env_a.reset(), env_a.step("bet_1x"), env_a.step("stand")]
 
         env_b = self.make_env(observation_profile="minimal_basic_strategy")
         env_b.load_shoe(["9", "7", "7", "10"], total_cards=4)
-        seq_b = [env_b.reset()]
+        seq_b = [env_b.reset(), env_b.step("bet_1x")]
 
         batch = encoder.encode_sequence_batch([seq_a, seq_b])
 
-        self.assertEqual(tuple(batch["state_vector"].shape), (2, 2, encoder.state_dim))
-        self.assertEqual(tuple(batch["action_mask"].shape), (2, 2, 6))
-        self.assertEqual(tuple(batch["padding_mask"].shape), (2, 2))
+        self.assertEqual(tuple(batch["state_vector"].shape), (2, 3, encoder.state_dim))
+        self.assertEqual(tuple(batch["action_mask"].shape), (2, 3, len(ACTION_ORDER)))
+        self.assertEqual(tuple(batch["padding_mask"].shape), (2, 3))
         self.assertTrue(batch["padding_mask"][0, 0].item())
         self.assertTrue(batch["padding_mask"][0, 1].item())
+        self.assertTrue(batch["padding_mask"][0, 2].item())
         self.assertTrue(batch["padding_mask"][1, 0].item())
-        self.assertFalse(batch["padding_mask"][1, 1].item())
-        self.assertEqual(batch["metadata"]["sequence_lengths"], [2, 1])
+        self.assertTrue(batch["padding_mask"][1, 1].item())
+        self.assertFalse(batch["padding_mask"][1, 2].item())
+        self.assertEqual(batch["metadata"]["sequence_lengths"], [3, 2])
 
     def test_encoder_state_dim_is_stable_across_round_progression(self) -> None:
         env = self.make_env(
@@ -156,6 +162,7 @@ class BlackjackEncoderTests(unittest.TestCase):
         )
 
         start = env.reset()
+        env.step("bet_1x")
         end = env.step("stand")
         next_round = env.reset()
 
