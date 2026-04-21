@@ -384,7 +384,16 @@ class BlackjackBellmanLossTests(unittest.TestCase):
             "next_action_mask": torch.zeros((2, 3, num_actions), dtype=torch.bool),
         }
 
-        loss_info = compute_td_loss_recurrent(online_network, target_network, batch, gamma=0.99)
+        loss_info = compute_td_loss_recurrent(
+            online_network,
+            target_network,
+            batch,
+            gamma=0.99,
+            config=BellmanLossConfig(
+                gamma=0.99,
+                phase_weights=LossPhaseWeightConfig(enabled=False),
+            ),
+        )
 
         self.assertAlmostEqual(float(loss_info["loss"].item()), 1.5, places=6)
         self.assertEqual(float(loss_info["num_valid_steps"].item()), 3.0)

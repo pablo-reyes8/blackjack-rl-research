@@ -58,11 +58,24 @@ class BaseBlackjackQNetwork(nn.Module):
         if not self.use_module_gating:
             return state_vector
 
-        gated_state = state_vector.clone()
-        for name, (start, end) in self.encoder.module_slices.items():
+        gated_chunks: list[torch.Tensor] = []
+        current_offset = 0
+        ordered_slices = sorted(self.encoder.module_slices.items(), key=lambda item: item[1][0])
+
+        for name, (start, end) in ordered_slices:
+            if current_offset < start:
+                gated_chunks.append(state_vector[..., current_offset:start])
+
             gate = self.module_gates[name]
-            gated_state[..., start:end] = gated_state[..., start:end] * gate
-        return gated_state
+            gated_chunks.append(state_vector[..., start:end] * gate)
+            current_offset = end
+
+        if current_offset < state_vector.shape[-1]:
+            gated_chunks.append(state_vector[..., current_offset:])
+
+        if not gated_chunks:
+            return state_vector
+        return torch.cat(gated_chunks, dim=-1)
 
     @classmethod
     def from_profiles(
