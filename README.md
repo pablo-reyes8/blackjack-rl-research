@@ -5,9 +5,9 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-research%20prototype-orange)
 
-Advanced reinforcement learning research environment for blackjack with partial observability, configurable table rules, recurrent agents, checkpointed training, and reproducible experiment presets.
+Advanced reinforcement learning research environment for blackjack with partial observability, configurable table rules, explicit bet-sizing and play phases, recurrent agents, checkpointed training, and reproducible experiment presets.
 
-This is not a toy "learn one round" blackjack project. The codebase already models hidden shoe state, reshuffle dynamics, variable observation profiles, replay buffers for recurrent training, and multiple Double DQN variants.
+This is not a toy "learn one round" blackjack project. The codebase already models hidden shoe state, reshuffle dynamics, cut-card behavior, variable observation profiles, explicit betting before play, replay buffers for recurrent training, and multiple Double DQN variants.
 
 The stack is intentionally built without Gymnasium or other RL framework abstractions. Environment dynamics, observation encoding, replay buffers, training loops, evaluation, checkpointing, and agent implementations are developed in pure PyTorch and native Python to keep the full decision pipeline transparent, customizable, and research-friendly.
 
@@ -35,16 +35,32 @@ The stack is intentionally built without Gymnasium or other RL framework abstrac
 ## Why this repository stands out
 
 - Blackjack is treated as a sequential decision-making problem under uncertainty, not as a single isolated hand.
-- The environment supports realistic rules such as splits, doubles, surrender, insurance, multi-deck shoes, dealer peek behavior, and reshuffle logic.
+- The environment supports realistic rules such as split depth limits, doubles, surrender, insurance, multi-deck shoes, dealer peek behavior, cut-card reshuffle logic, and optional six-card charlie.
+- Betting is part of the learning problem now: every round starts in a betting phase and the agent must learn both how much to bet and how to play the hand.
 - Observation design is part of the research surface: from compact basic-strategy-style inputs to simulator-level fully observable settings.
-- The project already includes feedforward, recurrent, and dueling recurrent Double DQN agents.
-- The training stack includes evaluation, replay buffers, epsilon scheduling, target-network updates, and checkpoint management.
+- The project already includes feedforward, recurrent, and dueling recurrent Double DQN agents with separate betting and playing heads over a shared trunk.
+- The training stack includes evaluation, replay buffers, dual epsilon scheduling by phase, optional n-step returns, optional phase-weighted loss, target-network updates, and checkpoint management.
 - The repository is now packaged for a clean first public push: `README`, `pyproject.toml`, Docker, GitHub Actions, YAML presets, requirements files, scripts, license, and repo hygiene files.
 
 ## Current status
 
-- Core environment implementation is present and covered by unit tests.
-- Encoder profiles are implemented for multiple observability regimes.
+- The core blackjack environment is already seriously implemented, configurable, and covered by unit and smoke tests.
+- The environment now models two explicit decision stages per round:
+
+| Stage | What the agent decides |
+| --- | --- |
+| `betting` | `bet_1x`, `bet_2x`, `bet_3x`, `bet_4x` |
+| `playing` | `stand`, `hit`, `double`, `split`, `surrender`, `insurance` |
+
+- Table-rule coverage available today:
+
+| Rule family | Current support |
+| --- | --- |
+| Shoe / dealing | multi-deck shoes, hidden shoe progress starts, reshuffle tracking, cut-card mode, realistic reset-to-betting flow |
+| Core table rules | S17/H17, blackjack payout, dealer peek, insurance, surrender, split rules, DAS, split-aces restrictions |
+| Extended rules | optional six-card charlie, configurable max split depth per hand, configurable bet multipliers |
+
+- Encoder profiles are implemented for multiple observability regimes and now encode explicit betting context and decision phase.
 - Agent architectures available today:
 
 | Architecture | Intended use |
@@ -52,6 +68,17 @@ The stack is intentionally built without Gymnasium or other RL framework abstrac
 | `feedforward` | Compact state, faster smoke runs, low-memory baselines |
 | `recurrent` | Partial observability with temporal credit assignment |
 | `dueling_recurrent` | Stronger sequence model for richer or harder table settings |
+
+- Training pipeline status today:
+
+| Capability | Current state |
+| --- | --- |
+| Replay | feedforward and recurrent replay buffers |
+| Exploration | dual epsilon by phase: betting and playing |
+| Loss | standard Double DQN targets, optional phase weighting, optional n-step support |
+| Network bias | separate betting and playing heads, plus phase adapters and module gating |
+| Monitoring | epoch, update, and eval prints with total, betting, and playing metrics |
+| Reproducibility | YAML presets, checkpointing, CLI describe/train/evaluate workflows |
 
 - Observation and encoder profiles available today:
 
@@ -132,6 +159,14 @@ blackjack-train --experiment-config configs/experiments/smoke-test.yaml
 ```
 
 This preset is intentionally small and is used by CI as a fast end-to-end validation run.
+
+Training output is phase-aware now. During a run the trainer prints, in a compact format:
+
+- betting epsilon and playing epsilon
+- loss and TD error split by phase
+- betting action frequencies and bet EV-style summaries
+- playing action frequencies
+- total reward and EV summaries for train and evaluation
 
 ### 3. Evaluate a checkpoint
 
@@ -371,7 +406,7 @@ Each experiment can define:
 - `start_state`: how episodes start, including hidden burned rounds
 - `environment`: full blackjack rules and observation profile
 - `model`: agent architecture and network hyperparameters
-- `training`: replay buffer, optimization, epsilon schedule, evaluation, checkpointing, and print settings
+- `training`: replay buffer, optimization, dual epsilon schedule, evaluation, checkpointing, and print settings
 
 The config loader supports inheritance through `extends`, so presets can share a common base while overriding only what changes.
 
@@ -394,7 +429,25 @@ model:
   architecture: recurrent
   encoder_profile: table_realistic_default
   recurrent_type: gru
+
+training:
+  epsilon:
+    betting:
+      start: 1.0
+      end: 0.10
+      decay_steps: 40000
+    playing:
+      start: 1.0
+      end: 0.03
+      decay_steps: 25000
 ```
+
+Important configuration notes:
+
+- `training.epsilon` supports both a legacy single schedule and a dual `betting` / `playing` schedule.
+- `training.n_step` is supported but remains optional.
+- phase-weighted TD loss is supported and enabled by default.
+- agent phase adapters and module gating are supported and enabled by default.
 
 ## Checkpoints and outputs
 
@@ -474,7 +527,8 @@ What is already strong:
 
 - environment fidelity and rule configurability
 - encoder flexibility
-- recurrent RL training pipeline
+- explicit bet-sizing plus hand-play modeling
+- recurrent RL training pipeline with phase-aware exploration and monitoring
 - reproducible preset-driven workflows
 
 What is still missing or intentionally left lightweight:
@@ -483,9 +537,10 @@ What is still missing or intentionally left lightweight:
 - no experiment tracking backend integration
 - no hyperparameter sweep orchestration
 - no pre-trained model zoo
+- no prioritized replay yet
 - no distributed or multi-node training support
 
-If this becomes a public research repo with active iteration, the next natural additions would be benchmark reports, release notes, experiment tracking, and curated result cards.
+If this becomes a public research repo with active iteration, the next natural additions would be benchmark reports, release notes, experiment tracking, prioritized replay, and curated result cards.
 
 ## License
 
