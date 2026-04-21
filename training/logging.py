@@ -19,6 +19,12 @@ class TrainingLogger:
         if self.config.enable:
             print(message)
 
+    def should_log_collection(self, env_step_in_epoch: int) -> bool:
+        return self.config.enable and env_step_in_epoch % self.config.print_collection_interval == 0
+
+    def should_log_update(self, update_in_epoch: int) -> bool:
+        return self.config.enable and update_in_epoch % self.config.print_update_interval == 0
+
     def _format_action_distribution(self, metrics: dict[str, Any], key: str, actions: tuple[str, ...]) -> str:
         frequencies = metrics.get(key) or {}
         if not isinstance(frequencies, dict):
@@ -126,7 +132,7 @@ class TrainingLogger:
         total_updates_in_epoch: int,
         metrics: dict[str, Any],
     ) -> None:
-        if not self.config.enable or update_in_epoch % self.config.print_update_interval != 0:
+        if not self.should_log_update(update_in_epoch):
             return
         updates_per_sec = 0.0
         if metrics.get("update_time_sec", 0.0):
@@ -163,7 +169,7 @@ class TrainingLogger:
         warmup_target: int,
         metrics: dict[str, Any],
     ) -> None:
-        if not self.config.enable or env_step_in_epoch % self.config.print_collection_interval != 0:
+        if not self.should_log_collection(env_step_in_epoch):
             return
         self._print(
             f"[collect {env_step_in_epoch}/{total_env_steps_in_epoch}] "

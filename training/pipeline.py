@@ -288,15 +288,20 @@ class BlackjackRLTrainer:
                     next_hidden_states,
                 )
 
-            policy_output = self.online_network(encoded_states)
+            batch = {
+                "state_vector": torch.stack([state["state_vector"] for state in encoded_states], dim=0),
+                "action_mask": torch.stack([state["action_mask"] for state in encoded_states], dim=0),
+                "module_tensors": {},
+                "metadata": {"batch_size": len(encoded_states)},
+            }
+            policy_output = self.online_network(batch)
             return policy_output["masked_q_values"], policy_output["action_mask"], None
 
     def _temporary_eval_mode(self) -> tuple[bool, bool]:
         online_was_training = self.online_network.training
-        target_was_training = self.target_network.training
-        self.online_network.eval()
-        self.target_network.eval()
-        return online_was_training, target_was_training
+        if online_was_training:
+            self.online_network.eval()
+        return online_was_training, False
 
     def _restore_mode(self, online_was_training: bool, target_was_training: bool) -> None:
         if online_was_training:
@@ -473,13 +478,14 @@ class BlackjackRLTrainer:
         for step_in_epoch in range(1, self.pipeline_config.trainer.env_steps_per_epoch + 1):
             env_steps_before_collect = self.env_step_count
             self.collect_experience(num_steps=1, tracker=behavior_tracker)
-            self.logger.log_collection(
-                env_step_in_epoch=step_in_epoch,
-                total_env_steps_in_epoch=self.pipeline_config.trainer.env_steps_per_epoch,
-                buffer_size=len(self.replay_buffer),
-                warmup_target=self.pipeline_config.replay_buffer.warmup_size,
-                metrics=behavior_tracker.summary(),
-            )
+            if self.logger.should_log_collection(step_in_epoch):
+                self.logger.log_collection(
+                    env_step_in_epoch=step_in_epoch,
+                    total_env_steps_in_epoch=self.pipeline_config.trainer.env_steps_per_epoch,
+                    buffer_size=len(self.replay_buffer),
+                    warmup_target=self.pipeline_config.replay_buffer.warmup_size,
+                    metrics=behavior_tracker.summary(),
+                )
 
             train_triggers = self._count_train_triggers_between(env_steps_before_collect, self.env_step_count)
             if self._buffer_ready() and train_triggers > 0:
