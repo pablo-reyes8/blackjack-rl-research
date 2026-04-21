@@ -16,6 +16,8 @@ model:
   architecture: dueling_recurrent
   encoder_profile: fully_observable_sim
   recurrent_type: gru
+  use_phase_adapters: true
+  use_module_gating: true
 
 training:
   trainer:

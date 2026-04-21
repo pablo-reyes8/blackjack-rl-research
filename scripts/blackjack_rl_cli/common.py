@@ -126,6 +126,8 @@ def build_blackjack_config(data: Mapping[str, Any] | None = None) -> BlackjackCo
     observation_data = values.pop("observation", None)
     if observation_data is not None:
         values["observation"] = build_observation_config(observation_data)
+    if "bet_multipliers" in values and isinstance(values["bet_multipliers"], list):
+        values["bet_multipliers"] = tuple(values["bet_multipliers"])
     return BlackjackConfig(**values)
 
 

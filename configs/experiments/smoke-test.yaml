@@ -6,6 +6,7 @@ metadata:
 
 run:
   num_envs: 1
+  base_seed: 13
 
 environment:
   n_decks: 1
@@ -20,6 +21,8 @@ model:
   use_layer_norm: false
   dropout: 0.0
   feedforward_hidden_dims: [128, 128]
+  use_phase_adapters: true
+  use_module_gating: true
 
 training:
   trainer:
@@ -33,17 +36,36 @@ training:
     reset_hidden_on_round_end: false
     sequence_end_on_done: false
     flush_partial_sequences_at_epoch_end: true
+    loss:
+      gamma: 0.99
+      loss_type: huber
+      validate_current_actions: true
+      validate_next_action_mask: true
+      allow_terminal_without_legal_next_action: true
+      phase_weights:
+        enabled: true
+        betting_weight: 1.5
+        playing_weight: 1.0
   replay_buffer:
     capacity: 256
     batch_size: 4
     warmup_size: 8
     sequence_length: 8
     min_sequence_length: 2
+  n_step:
+    enabled: false
+    n_steps: 3
   epsilon:
-    start: 0.8
-    end: 0.1
-    decay_steps: 50
-    evaluation_epsilon: 0.0
+    betting:
+      start: 0.8
+      end: 0.1
+      decay_steps: 50
+      evaluation_epsilon: 0.0
+    playing:
+      start: 0.8
+      end: 0.1
+      decay_steps: 50
+      evaluation_epsilon: 0.0
   evaluation:
     enabled: true
     every_n_epochs: 1
@@ -57,3 +79,11 @@ training:
     periodic_interval_updates: 2
   prints:
     enable: false
+    print_run_summary: true
+    print_warmup_interval: 200
+    print_update_interval: 50
+    print_collection_interval: 100
+    print_epoch_header: true
+    print_epoch_summary: true
+    print_eval_summary: true
+    include_segment_details: false

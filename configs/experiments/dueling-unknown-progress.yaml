@@ -24,6 +24,8 @@ model:
   recurrent_type: lstm
   value_hidden_dim: 128
   advantage_hidden_dim: 128
+  use_phase_adapters: true
+  use_module_gating: true
 
 training:
   trainer:

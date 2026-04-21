@@ -4,6 +4,7 @@ metadata:
 
 run:
   num_envs: 4
+  base_seed: 7
 
 start_state:
   mode: fresh_shoe
@@ -15,19 +16,25 @@ start_state:
 environment:
   n_decks: 6
   shoe_penetration: 0.8
+  use_cut_card: false
   dealer_hits_soft_17: false
   blackjack_payout: 1.5
   dealer_peeks_for_blackjack: true
   double_allowed_on: any_two_cards
   double_after_split_allowed: true
+  double_split_aces_allowed: false
   split_rule: same_value
   max_hands_after_split: 4
+  max_split_depth_per_hand: null
   resplit_aces_allowed: true
   hit_split_aces_allowed: false
   surrender_allowed: true
   insurance_allowed: true
+  six_card_charlie_enabled: false
   base_bet: 1.0
+  bet_multipliers: [1, 2, 3, 4]
   strict_shoe_validation: false
+  observation_mode: null
   expose_shoe_composition: false
   observation:
     profile: table_realistic_default
@@ -43,6 +50,10 @@ model:
   recurrent_num_layers: 1
   recurrent_type: gru
   head_hidden_dim: 128
+  value_hidden_dim: 128
+  advantage_hidden_dim: 128
+  use_phase_adapters: true
+  use_module_gating: true
 
 training:
   trainer:
@@ -62,17 +73,30 @@ training:
       validate_current_actions: true
       validate_next_action_mask: true
       allow_terminal_without_legal_next_action: true
+      phase_weights:
+        enabled: true
+        betting_weight: 1.5
+        playing_weight: 1.0
   replay_buffer:
     capacity: 50000
     batch_size: 64
     warmup_size: 1000
     sequence_length: 8
     min_sequence_length: 2
+  n_step:
+    enabled: false
+    n_steps: 3
   epsilon:
-    start: 1.0
-    end: 0.05
-    decay_steps: 25000
-    evaluation_epsilon: 0.0
+    betting:
+      start: 1.0
+      end: 0.10
+      decay_steps: 40000
+      evaluation_epsilon: 0.0
+    playing:
+      start: 1.0
+      end: 0.03
+      decay_steps: 25000
+      evaluation_epsilon: 0.0
   optimization:
     optimizer: adam
     learning_rate: 0.001
@@ -101,8 +125,11 @@ training:
     maximize_best_metric: true
   prints:
     enable: true
+    print_run_summary: true
+    print_warmup_interval: 200
     print_update_interval: 50
     print_collection_interval: 100
+    print_epoch_header: true
     print_epoch_summary: true
     print_eval_summary: true
     include_segment_details: false

@@ -18,6 +18,8 @@ model:
   use_layer_norm: false
   dropout: 0.0
   feedforward_hidden_dims: [256, 256]
+  use_phase_adapters: true
+  use_module_gating: true
 
 training:
   trainer:
