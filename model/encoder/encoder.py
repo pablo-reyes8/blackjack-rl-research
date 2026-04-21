@@ -11,7 +11,7 @@ from enviroment_bj.core import ACTION_ORDER
 from .base import BaseBlackjackEncoder
 from .batching import pad_encoded_sequences, stack_encoded_steps
 from .config import EncoderConfig
-from .hand import BetEncoder, HandContextEncoder, HandFeatureEncoder, InsuranceContextEncoder, OtherHandsEncoder
+from .hand import BetEncoder, BettingContextEncoder, HandContextEncoder, HandFeatureEncoder, InsuranceContextEncoder, OtherHandsEncoder
 from .history import DiscardSummaryEncoder, ExactShoeEncoder, ObservedCardsHistoryEncoder, TemporalFeatureEncoder
 from .rules import RuleEncoder
 
@@ -42,6 +42,8 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
             self._register_module("other_hands", OtherHandsEncoder(self.config))
         self._register_module("hand_context", HandContextEncoder(self.config))
         self._register_module("insurance", InsuranceContextEncoder())
+        if self.config.encode_betting_context:
+            self._register_module("betting_context", BettingContextEncoder())
         if self.config.profile != "minimal_basic_strategy":
             self._register_module("bet", BetEncoder())
         if self.config.encode_rules:
@@ -96,6 +98,8 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
                 "module_slices": dict(self.module_slices),
                 "observation_profile": observation.get("profile"),
                 "observation_mode": observation.get("mode"),
+                "decision_phase": observation.get("decision_phase"),
+                "available_bet_multipliers": observation.get("available_bet_multipliers"),
             },
         }
 

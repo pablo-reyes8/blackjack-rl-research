@@ -43,9 +43,35 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertEqual(encoded["action_mask"].dtype, torch.bool)
         self.assertEqual(tuple(encoded["state_vector"].shape), (encoder.state_dim,))
         self.assertEqual(tuple(encoded["action_mask"].shape), (len(ACTION_ORDER),))
-        self.assertEqual(set(encoded["module_tensors"].keys()), {"hand", "hand_context", "insurance", "rules"})
+        self.assertEqual(set(encoded["module_tensors"].keys()), {"hand", "hand_context", "insurance", "betting_context", "rules"})
         self.assertEqual(encoded["metadata"]["profile"], "minimal_basic_strategy")
         self.assertEqual(encoded["metadata"]["observation_profile"], "minimal_basic_strategy")
+        self.assertEqual(encoded["metadata"]["decision_phase"], "betting")
+        self.assertEqual(encoded["metadata"]["available_bet_multipliers"], [1, 2, 3, 4])
+
+    def test_betting_context_encoder_distinguishes_betting_and_playing_phase(self) -> None:
+        env = self.make_env(observation_profile="minimal_basic_strategy")
+        env.load_shoe(["10", "6", "7", "10"], total_cards=4)
+
+        betting = env.reset()
+        playing = env.step("bet_2x")
+        encoder = BlackjackObservationEncoder.from_profile("minimal_basic_strategy")
+
+        betting_encoded = encoder(betting)
+        playing_encoded = encoder(playing)
+        betting_tensor = betting_encoded["module_tensors"]["betting_context"]
+        playing_tensor = playing_encoded["module_tensors"]["betting_context"]
+
+        self.assertEqual(tuple(betting_tensor.shape), (9,))
+        self.assertEqual(float(betting_tensor[0].item()), 1.0)
+        self.assertEqual(float(betting_tensor[1].item()), 0.0)
+        self.assertEqual(float(betting_tensor[2].item()), 1.0)
+        self.assertEqual(float(betting_tensor[-2].item()), 0.0)
+        self.assertEqual(float(playing_tensor[0].item()), 0.0)
+        self.assertEqual(float(playing_tensor[1].item()), 1.0)
+        self.assertEqual(float(playing_tensor[2].item()), 0.0)
+        self.assertEqual(float(playing_tensor[-2].item()), 1.0)
+        self.assertEqual(float(playing_tensor[-1].item()), 2.0)
 
     def test_realistic_encoder_encodes_history_temporal_and_other_hands(self) -> None:
         env = self.make_env(observation_profile="table_realistic_default")
@@ -59,6 +85,7 @@ class BlackjackEncoderTests(unittest.TestCase):
 
         self.assertEqual(encoded["metadata"]["observation_profile"], "table_realistic_default")
         self.assertIn("other_hands", encoded["module_tensors"])
+        self.assertIn("betting_context", encoded["module_tensors"])
         self.assertIn("observed_history", encoded["module_tensors"])
         self.assertIn("discard_summary", encoded["module_tensors"])
         self.assertIn("temporal", encoded["module_tensors"])
@@ -81,6 +108,7 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertIn("n_decks", response["table_rules"])
         self.assertIn("dealer_peeks_for_blackjack", response["table_rules"])
         self.assertEqual(tuple(encoded["module_tensors"]["exact_shoe"].shape), (13,))
+        self.assertEqual(tuple(encoded["module_tensors"]["rules"].shape), (22,))
         self.assertAlmostEqual(float(encoded["module_tensors"]["exact_shoe"].sum().item()), 1.0, places=5)
 
     def test_unknown_progress_encoder_profile_handles_hidden_start_without_shape_changes(self) -> None:

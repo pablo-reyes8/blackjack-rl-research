@@ -73,7 +73,7 @@ class TemporalFeatureEncoder(BaseFeatureEncoder):
     def __init__(self, config: EncoderConfig) -> None:
         super().__init__()
         self.config = config
-        self.base_dim = 7 + 4 + 10
+        self.base_dim = 7 + 4 + (5 + len(HAND_SETTLEMENT_VALUES))
         self.recent_actions_dim = (
             config.max_recent_actions * len(PUBLIC_ACTION_TOKENS) + config.max_recent_actions
             if config.encode_recent_actions

@@ -6,6 +6,7 @@ import torch
 
 from .base import BaseFeatureEncoder
 from .config import EncoderConfig
+from .constants import AVAILABLE_BET_MULTIPLIERS
 from .utils import (
     card_total_features,
     cards_to_padded_rank_tensor,
@@ -134,6 +135,31 @@ class InsuranceContextEncoder(BaseFeatureEncoder):
             [
                 safe_bool(context.get("insurance_offer_active")),
                 normalize_scalar(context.get("insurance_bet"), base_bet),
+            ],
+            dtype=torch.float32,
+        )
+
+
+class BettingContextEncoder(BaseFeatureEncoder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output_dim = 2 + 1 + len(AVAILABLE_BET_MULTIPLIERS) + 1 + 1
+
+    def encode(self, observation: Mapping[str, Any], table_rules: Mapping[str, Any]) -> torch.Tensor:
+        decision_phase = observation.get("decision_phase")
+        betting_context = observation.get("betting_context") or {}
+        available_multipliers = set(observation.get("available_bet_multipliers") or betting_context.get("available_bet_multipliers") or [])
+        base_bet = safe_float(table_rules.get("base_bet"), default=1.0) or 1.0
+        current_bet = betting_context.get("current_bet", observation.get("current_bet"))
+
+        return torch.tensor(
+            [
+                safe_bool(decision_phase == "betting"),
+                safe_bool(decision_phase == "playing"),
+                safe_bool(betting_context.get("can_place_bet")),
+                *[safe_bool(multiplier in available_multipliers) for multiplier in AVAILABLE_BET_MULTIPLIERS],
+                safe_bool(current_bet is not None),
+                normalize_scalar(current_bet, base_bet),
             ],
             dtype=torch.float32,
         )

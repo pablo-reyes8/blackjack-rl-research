@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class EncoderConfig:
     profile: str = "table_realistic_default"
     encode_rules: bool = True
+    encode_betting_context: bool = True
     encode_other_hands: bool = True
     encode_temporal: bool = True
     encode_observed_history: bool = True
@@ -58,6 +59,7 @@ class EncoderConfig:
             return cls(
                 profile=profile,
                 encode_rules=True,
+                encode_betting_context=True,
                 encode_other_hands=False,
                 encode_temporal=False,
                 encode_observed_history=False,
@@ -73,6 +75,7 @@ class EncoderConfig:
             return cls(
                 profile=profile,
                 encode_rules=True,
+                encode_betting_context=True,
                 encode_other_hands=True,
                 encode_temporal=True,
                 encode_observed_history=True,
@@ -89,6 +92,7 @@ class EncoderConfig:
             return cls(
                 profile=profile,
                 encode_rules=True,
+                encode_betting_context=True,
                 encode_other_hands=True,
                 encode_temporal=True,
                 encode_observed_history=True,
@@ -105,6 +109,7 @@ class EncoderConfig:
             return cls(
                 profile=profile,
                 encode_rules=True,
+                encode_betting_context=True,
                 encode_other_hands=True,
                 encode_temporal=True,
                 encode_observed_history=True,
