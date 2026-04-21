@@ -78,10 +78,13 @@ class BlackjackRLTrainer:
     def _set_env_runtime_mode(self, *, enable_transition_recording: bool) -> None:
         for env in self.envs:
             if hasattr(env, "set_runtime_options"):
-                env.set_runtime_options(enable_transition_recording=enable_transition_recording)
+                env.set_runtime_options(
+                    enable_transition_recording=enable_transition_recording,
+                    compact_response_mode=not enable_transition_recording,
+                )
 
     def _encode_response_for_storage(self, response: dict[str, Any]) -> dict[str, Any]:
-        encoded = self.online_network.encoder(response)
+        encoded = self.online_network.encoder.encode_state_only(response)
         return {
             "state_vector": encoded["state_vector"].detach().cpu(),
             "action_mask": encoded["action_mask"].detach().cpu(),
@@ -441,7 +444,7 @@ class BlackjackRLTrainer:
         eval_envs = clone_environments(self.envs, seed_offset=self.pipeline_config.trainer.seed + 100_000)
         for env in eval_envs:
             if hasattr(env, "set_runtime_options"):
-                env.set_runtime_options(enable_transition_recording=False)
+                env.set_runtime_options(enable_transition_recording=False, compact_response_mode=True)
         return evaluate_policy(
             envs=eval_envs,
             model=self.online_network,

@@ -57,7 +57,7 @@ class BehaviorMetricsTracker:
         phase = observation.get("decision_phase")
         if isinstance(phase, str) and phase:
             return phase
-        public_state = response["info"]["public_state"]
+        public_state = (response.get("info") or {}).get("public_state") or {}
         phase = public_state.get("decision_phase")
         return phase if isinstance(phase, str) and phase else "playing"
 
@@ -83,12 +83,13 @@ class BehaviorMetricsTracker:
             self.greedy_action_count += 1
             self.greedy_action_count_by_phase[phase] += 1
 
-        public_state = response["info"]["public_state"]
+        info = response["info"]
+        public_state = info.get("public_state") or {}
         current_hand = public_state.get("current_hand")
-        insurance_offer = public_state.get("insurance", {}).get("offer_active", False)
+        insurance_offer = bool(public_state.get("insurance", {}).get("offer_active", False))
 
         if phase == "betting" and action_name in BET_ACTION_ORDER:
-            self.pending_bets_by_round[(env_key, int(public_state.get("round_index", 0)))] = action_name
+            self.pending_bets_by_round[(env_key, int(info.get("round_index", public_state.get("round_index", 0))))] = action_name
 
         if current_hand:
             cards = current_hand.get("cards", [])
@@ -114,11 +115,11 @@ class BehaviorMetricsTracker:
         if not response["done"]:
             return
         info = response["info"]
-        public_state = info["public_state"]
+        public_state = info.get("public_state") or {}
         settlements = info.get("hand_settlements", [])
         hand_rewards = info.get("hand_rewards", [])
         insurance_reward = float(info.get("insurance_reward", 0.0))
-        hand_count = len(public_state.get("player_hands", []))
+        hand_count = int(info.get("hand_count", public_state.get("hand_count", len(public_state.get("player_hands", [])))))
 
         self.total_rounds += 1
         self.total_hands += hand_count
@@ -131,7 +132,7 @@ class BehaviorMetricsTracker:
             if settlement is not None:
                 self.settlement_counts[settlement] += 1
 
-        round_key = (env_key, int(public_state.get("round_index", 0)))
+        round_key = (env_key, int(info.get("round_index", public_state.get("round_index", 0))))
         bet_action = self.pending_bets_by_round.pop(round_key, None)
         if bet_action is not None:
             self.bet_reward_totals[bet_action] += float(response["reward"])

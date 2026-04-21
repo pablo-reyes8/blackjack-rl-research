@@ -68,6 +68,27 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
         self.modules_by_name[name] = module
         self.module_dims[name] = getattr(module, "output_dim")
 
+    def _resolve_action_mask(self, response: Mapping[str, Any]) -> torch.Tensor:
+        action_mask_value = response.get("action_mask", [0] * len(ACTION_ORDER))
+        if isinstance(action_mask_value, torch.Tensor):
+            return action_mask_value.detach().to(dtype=torch.bool)
+        return torch.tensor(action_mask_value, dtype=torch.bool)
+
+    def encode_state_only(self, response: Mapping[str, Any]) -> dict[str, Any]:
+        observation = response.get("observation") or {}
+        table_rules = response.get("table_rules") or {}
+        module_tensors = [module(observation, table_rules).to(torch.float32) for module in self.modules_by_name.values()]
+        state_vector = torch.cat(module_tensors, dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
+        action_mask = self._resolve_action_mask(response)
+
+        if self.config.encode_action_mask_features:
+            state_vector = torch.cat([state_vector, action_mask.to(torch.float32)], dim=0)
+
+        return {
+            "state_vector": state_vector,
+            "action_mask": action_mask,
+        }
+
     def forward(self, response: Mapping[str, Any]) -> dict[str, Any]:
         observation = response.get("observation") or {}
         table_rules = response.get("table_rules") or {}
@@ -78,11 +99,7 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
             module_tensors[name] = tensor
 
         state_vector = torch.cat(list(module_tensors.values()), dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
-        action_mask_value = response.get("action_mask", [0] * len(ACTION_ORDER))
-        if isinstance(action_mask_value, torch.Tensor):
-            action_mask = action_mask_value.detach().to(dtype=torch.bool)
-        else:
-            action_mask = torch.tensor(action_mask_value, dtype=torch.bool)
+        action_mask = self._resolve_action_mask(response)
 
         if self.config.encode_action_mask_features:
             state_vector = torch.cat([state_vector, action_mask.to(torch.float32)], dim=0)

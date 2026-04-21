@@ -69,12 +69,20 @@ class BlackjackEnvironment:
         self._start_state_prepared = False
         self._manual_shoe_loaded = False
         self.enable_transition_recording = True
+        self.compact_response_mode = False
         self._initialize_temporal_state()
         self._reset_round_state()
 
-    def set_runtime_options(self, *, enable_transition_recording: bool | None = None) -> None:
+    def set_runtime_options(
+        self,
+        *,
+        enable_transition_recording: bool | None = None,
+        compact_response_mode: bool | None = None,
+    ) -> None:
         if enable_transition_recording is not None:
             self.enable_transition_recording = bool(enable_transition_recording)
+        if compact_response_mode is not None:
+            self.compact_response_mode = bool(compact_response_mode)
 
     def _initialize_temporal_state(self) -> None:
         self.shuffle_count = 0
@@ -96,6 +104,7 @@ class BlackjackEnvironment:
 
     def _build_bet_action_cache(self) -> None:
         self._available_bet_multipliers = tuple(self.config.bet_multipliers)
+        self._available_bet_multipliers_list = list(self._available_bet_multipliers)
         self._bet_amount_by_action = {
             f"bet_{multiplier}x": self.config.base_bet * float(multiplier)
             for multiplier in self._available_bet_multipliers
@@ -868,8 +877,52 @@ class BlackjackEnvironment:
     def get_transition_log(self) -> list[dict[str, Any]]:
         return deepcopy(self.transition_log)
 
+    def _serialize_tracking_hand(self, hand: HandState | None) -> dict[str, Any] | None:
+        if hand is None:
+            return None
+        return {
+            "cards": list(hand.cards),
+            "is_soft": hand.is_soft(),
+            "from_split": hand.from_split,
+        }
+
+    def _build_compact_public_state(self) -> dict[str, Any]:
+        return {
+            "round_index": self.round_index,
+            "decision_phase": self.decision_phase,
+            "current_hand": self._serialize_tracking_hand(self._current_hand()),
+            "insurance": {"offer_active": self.insurance_offer_active},
+            "hand_count": len(self.player_hands),
+        }
+
     def _build_response(self, *, action_name: str | None, reward: float) -> dict[str, Any]:
         action_mask_by_name = self.legal_actions()
+        action_mask = [int(action_mask_by_name[name]) for name in ACTION_ORDER]
+        observation = self.get_agent_observation()
+
+        if self.compact_response_mode and not self.enable_transition_recording:
+            return {
+                "observation": observation,
+                "table_rules": self._cached_visible_table_rules,
+                "action_mask": action_mask,
+                "reward": reward,
+                "done": self.round_over,
+                "terminated": self.round_over,
+                "truncated": False,
+                "info": {
+                    "action": action_name,
+                    "round_index": self.round_index,
+                    "decision_phase": self.decision_phase,
+                    "round_over": self.round_over,
+                    "round_reward": self.round_reward,
+                    "insurance_reward": self.insurance_reward,
+                    "hand_rewards": [hand.reward for hand in self.player_hands],
+                    "hand_settlements": [hand.settlement for hand in self.player_hands],
+                    "hand_count": len(self.player_hands),
+                    "public_state": self._build_compact_public_state(),
+                },
+            }
+
         info = {
             "action": action_name,
             "round_index": self.round_index,
@@ -882,9 +935,9 @@ class BlackjackEnvironment:
             "public_state": self.get_public_state(),
         }
         return {
-            "observation": self.get_agent_observation(),
+            "observation": observation,
             "table_rules": self.get_visible_table_rules(),
-            "action_mask": [int(action_mask_by_name[name]) for name in ACTION_ORDER],
+            "action_mask": action_mask,
             "action_mask_by_name": action_mask_by_name,
             "legal_actions": [name for name, allowed in action_mask_by_name.items() if allowed],
             "reward": reward,
