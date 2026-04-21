@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,48 @@ class EpsilonScheduleConfig:
                 raise ValueError(f"{name} must be in [0, 1]")
         if self.decay_steps <= 0:
             raise ValueError("decay_steps must be positive")
+
+
+@dataclass(slots=True)
+class DualEpsilonConfig:
+    betting: EpsilonScheduleConfig = field(
+        default_factory=lambda: EpsilonScheduleConfig(
+            start=1.0,
+            end=0.10,
+            decay_steps=40_000,
+            evaluation_epsilon=0.0,
+        )
+    )
+    playing: EpsilonScheduleConfig = field(
+        default_factory=lambda: EpsilonScheduleConfig(
+            start=1.0,
+            end=0.03,
+            decay_steps=25_000,
+            evaluation_epsilon=0.0,
+        )
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.betting, EpsilonScheduleConfig):
+            raise TypeError("betting must be an EpsilonScheduleConfig instance")
+        if not isinstance(self.playing, EpsilonScheduleConfig):
+            raise TypeError("playing must be an EpsilonScheduleConfig instance")
+
+    @classmethod
+    def from_shared(cls, config: EpsilonScheduleConfig) -> DualEpsilonConfig:
+        if not isinstance(config, EpsilonScheduleConfig):
+            raise TypeError("config must be an EpsilonScheduleConfig instance")
+        return cls(betting=deepcopy(config), playing=deepcopy(config))
+
+
+@dataclass(slots=True)
+class NStepConfig:
+    enabled: bool = False
+    n_steps: int = 3
+
+    def __post_init__(self) -> None:
+        if self.n_steps <= 0:
+            raise ValueError("n_steps must be positive")
 
 
 @dataclass(slots=True)
@@ -159,9 +202,18 @@ class TrainerConfig:
 class TrainingPipelineConfig:
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     replay_buffer: ReplayBufferConfig = field(default_factory=ReplayBufferConfig)
-    epsilon: EpsilonScheduleConfig = field(default_factory=EpsilonScheduleConfig)
+    epsilon: DualEpsilonConfig | EpsilonScheduleConfig = field(default_factory=DualEpsilonConfig)
+    n_step: NStepConfig = field(default_factory=NStepConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     target_update: TargetUpdateConfig = field(default_factory=TargetUpdateConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     checkpoints: CheckpointConfig = field(default_factory=CheckpointConfig)
     prints: PrintConfig = field(default_factory=PrintConfig)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.epsilon, EpsilonScheduleConfig):
+            self.epsilon = DualEpsilonConfig.from_shared(self.epsilon)
+        elif not isinstance(self.epsilon, DualEpsilonConfig):
+            raise TypeError("epsilon must be an EpsilonScheduleConfig or DualEpsilonConfig instance")
+        if not isinstance(self.n_step, NStepConfig):
+            raise TypeError("n_step must be an NStepConfig instance")

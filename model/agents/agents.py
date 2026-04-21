@@ -5,7 +5,7 @@ from typing import Any, Mapping, Sequence
 import torch
 from torch import nn
 
-from enviroment_bj.core import ACTION_ORDER
+from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER, PLAYING_ACTION_ORDER
 from model.encoder import BlackjackObservationEncoder
 
 from .common import apply_action_mask, infer_module_device, move_encoded_batch_to_device
@@ -24,7 +24,45 @@ class BaseBlackjackQNetwork(nn.Module):
         super().__init__()
         self.config = config
         self.encoder = encoder or BlackjackObservationEncoder(config.encoder)
+        self.bet_action_names = BET_ACTION_ORDER
+        self.play_action_names = PLAYING_ACTION_ORDER
+        self.num_bet_actions = len(self.bet_action_names)
+        self.num_play_actions = len(self.play_action_names)
         self.num_actions = len(ACTION_ORDER)
+        self.bet_action_slice = slice(0, self.num_bet_actions)
+        self.play_action_slice = slice(self.num_bet_actions, self.num_actions)
+        self.use_module_gating = bool(getattr(self.config, "use_module_gating", False))
+
+        if tuple(ACTION_ORDER) != self.bet_action_names + self.play_action_names:
+            raise ValueError("ACTION_ORDER must match bet actions followed by play actions")
+
+        self.module_gates = nn.ParameterDict(
+            {
+                name: nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+                for name in self.encoder.module_slices
+            }
+        )
+
+    def _build_phase_adapter(self, hidden_dim: int) -> nn.Module:
+        if not getattr(self.config, "use_phase_adapters", False):
+            return nn.Identity()
+        return build_mlp(
+            hidden_dim,
+            (hidden_dim,),
+            activation=self.config.activation,
+            use_layer_norm=True,
+            dropout=0.0,
+        )
+
+    def _apply_module_gating(self, state_vector: torch.Tensor) -> torch.Tensor:
+        if not self.use_module_gating:
+            return state_vector
+
+        gated_state = state_vector.clone()
+        for name, (start, end) in self.encoder.module_slices.items():
+            gate = self.module_gates[name]
+            gated_state[..., start:end] = gated_state[..., start:end] * gate
+        return gated_state
 
     @classmethod
     def from_profiles(
@@ -47,6 +85,12 @@ class BaseBlackjackQNetwork(nn.Module):
 
     def _device(self) -> torch.device:
         return infer_module_device(self)
+
+    def _combine_phase_q_values(self, bet_q_values: torch.Tensor, play_q_values: torch.Tensor) -> torch.Tensor:
+        q_values = torch.cat([bet_q_values, play_q_values], dim=-1)
+        if q_values.shape[-1] != self.num_actions:
+            raise ValueError(f"Combined q_values has invalid size {q_values.shape[-1]} (expected {self.num_actions})")
+        return q_values
 
     def _prepare_feedforward_batch(self, inputs: Any) -> dict[str, Any]:
         if isinstance(inputs, Mapping) and isinstance(inputs.get("state_vector"), torch.Tensor):
@@ -168,16 +212,25 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
             dropout=self.config.dropout,
         )
         hidden_dim = self.config.feedforward_hidden_dims[-1]
-        self.q_head = nn.Linear(hidden_dim, self.num_actions)
+        self.bet_adapter = self._build_phase_adapter(hidden_dim)
+        self.play_adapter = self._build_phase_adapter(hidden_dim)
+        self.bet_head = nn.Linear(hidden_dim, self.num_bet_actions)
+        self.play_head = nn.Linear(hidden_dim, self.num_play_actions)
 
     def forward(self, inputs: Any) -> dict[str, Any]:
         encoded = self._prepare_feedforward_batch(inputs)
-        state_vector = encoded["state_vector"]
+        state_vector = self._apply_module_gating(encoded["state_vector"])
         hidden = self.backbone(state_vector)
-        q_values = self.q_head(hidden)
+        bet_hidden = self.bet_adapter(hidden)
+        play_hidden = self.play_adapter(hidden)
+        bet_q_values = self.bet_head(bet_hidden)
+        play_q_values = self.play_head(play_hidden)
+        q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
         return {
             "q_values": q_values,
+            "bet_q_values": bet_q_values,
+            "play_q_values": play_q_values,
             "masked_q_values": masked_q_values,
             "action_mask": encoded["action_mask"],
             "state_vector": state_vector,
@@ -188,6 +241,8 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
                 "encoder_profile": self.config.encoder.profile,
                 "state_dim": self.state_dim,
                 "batch_shape": tuple(q_values.shape),
+                "bet_action_slice": (self.bet_action_slice.start, self.bet_action_slice.stop),
+                "play_action_slice": (self.play_action_slice.start, self.play_action_slice.stop),
                 **(encoded.get("metadata") or {}),
             },
         }
@@ -227,9 +282,19 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
             num_layers=self.config.recurrent_num_layers,
             recurrent_type=self.config.recurrent_type,
         )
-        self.q_head = QHead(
+        self.bet_adapter = self._build_phase_adapter(self.config.recurrent_hidden_dim)
+        self.play_adapter = self._build_phase_adapter(self.config.recurrent_hidden_dim)
+        self.bet_head = QHead(
             input_dim=self.config.recurrent_hidden_dim,
             hidden_dim=self.config.head_hidden_dim,
+            output_dim=self.num_bet_actions,
+            activation=self.config.activation,
+            dropout=self.config.dropout,
+        )
+        self.play_head = QHead(
+            input_dim=self.config.recurrent_hidden_dim,
+            hidden_dim=self.config.head_hidden_dim,
+            output_dim=self.num_play_actions,
             activation=self.config.activation,
             dropout=self.config.dropout,
         )
@@ -239,7 +304,7 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
 
     def forward(self, inputs: Any, hidden_state: Any = None) -> dict[str, Any]:
         encoded = self._prepare_sequence_batch(inputs)
-        state_vector = encoded["state_vector"]
+        state_vector = self._apply_module_gating(encoded["state_vector"])
         padding_mask = encoded["padding_mask"]
         projected = self.input_projection(state_vector)
         recurrent_output, next_hidden_state = self.recurrent_backbone(
@@ -247,10 +312,16 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
             padding_mask=padding_mask,
             hidden_state=hidden_state,
         )
-        q_values = self.q_head(recurrent_output)
+        bet_hidden = self.bet_adapter(recurrent_output)
+        play_hidden = self.play_adapter(recurrent_output)
+        bet_q_values = self.bet_head(bet_hidden)
+        play_q_values = self.play_head(play_hidden)
+        q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
         return {
             "q_values": q_values,
+            "bet_q_values": bet_q_values,
+            "play_q_values": play_q_values,
             "masked_q_values": masked_q_values,
             "action_mask": encoded["action_mask"],
             "padding_mask": padding_mask,
@@ -264,6 +335,8 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
                 "encoder_profile": self.config.encoder.profile,
                 "state_dim": self.state_dim,
                 "sequence_shape": tuple(q_values.shape),
+                "bet_action_slice": (self.bet_action_slice.start, self.bet_action_slice.stop),
+                "play_action_slice": (self.play_action_slice.start, self.play_action_slice.stop),
                 **(encoded.get("metadata") or {}),
             },
         }
@@ -273,6 +346,8 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
         return {
             **output,
             "q_values": output["q_values"].squeeze(1),
+            "bet_q_values": output["bet_q_values"].squeeze(1),
+            "play_q_values": output["play_q_values"].squeeze(1),
             "masked_q_values": output["masked_q_values"].squeeze(1),
             "action_mask": output["action_mask"].squeeze(1),
             "padding_mask": output["padding_mask"].squeeze(1),
@@ -320,10 +395,21 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
             num_layers=self.config.recurrent_num_layers,
             recurrent_type=self.config.recurrent_type,
         )
-        self.dueling_head = DuelingQHead(
+        self.bet_adapter = self._build_phase_adapter(self.config.recurrent_hidden_dim)
+        self.play_adapter = self._build_phase_adapter(self.config.recurrent_hidden_dim)
+        self.bet_head = DuelingQHead(
             input_dim=self.config.recurrent_hidden_dim,
             value_hidden_dim=self.config.value_hidden_dim,
             advantage_hidden_dim=self.config.advantage_hidden_dim,
+            output_dim=self.num_bet_actions,
+            activation=self.config.activation,
+            dropout=self.config.dropout,
+        )
+        self.play_head = DuelingQHead(
+            input_dim=self.config.recurrent_hidden_dim,
+            value_hidden_dim=self.config.value_hidden_dim,
+            advantage_hidden_dim=self.config.advantage_hidden_dim,
+            output_dim=self.num_play_actions,
             activation=self.config.activation,
             dropout=self.config.dropout,
         )
@@ -333,7 +419,7 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
 
     def forward(self, inputs: Any, hidden_state: Any = None) -> dict[str, Any]:
         encoded = self._prepare_sequence_batch(inputs)
-        state_vector = encoded["state_vector"]
+        state_vector = self._apply_module_gating(encoded["state_vector"])
         padding_mask = encoded["padding_mask"]
         projected = self.input_projection(state_vector)
         recurrent_output, next_hidden_state = self.recurrent_backbone(
@@ -341,13 +427,25 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
             padding_mask=padding_mask,
             hidden_state=hidden_state,
         )
-        q_values, values, advantages = self.dueling_head(recurrent_output)
+        bet_hidden = self.bet_adapter(recurrent_output)
+        play_hidden = self.play_adapter(recurrent_output)
+        bet_q_values, bet_values, bet_advantages = self.bet_head(bet_hidden)
+        play_q_values, play_values, play_advantages = self.play_head(play_hidden)
+        q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
+        advantages = self._combine_phase_q_values(bet_advantages, play_advantages)
+        values = (bet_values + play_values) / 2.0
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
         return {
             "q_values": q_values,
+            "bet_q_values": bet_q_values,
+            "play_q_values": play_q_values,
             "masked_q_values": masked_q_values,
             "state_value": values,
+            "bet_state_value": bet_values,
+            "play_state_value": play_values,
             "advantages": advantages,
+            "bet_advantages": bet_advantages,
+            "play_advantages": play_advantages,
             "action_mask": encoded["action_mask"],
             "padding_mask": padding_mask,
             "state_vector": state_vector,
@@ -360,6 +458,8 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
                 "encoder_profile": self.config.encoder.profile,
                 "state_dim": self.state_dim,
                 "sequence_shape": tuple(q_values.shape),
+                "bet_action_slice": (self.bet_action_slice.start, self.bet_action_slice.stop),
+                "play_action_slice": (self.play_action_slice.start, self.play_action_slice.stop),
                 **(encoded.get("metadata") or {}),
             },
         }
@@ -369,9 +469,15 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
         return {
             **output,
             "q_values": output["q_values"].squeeze(1),
+            "bet_q_values": output["bet_q_values"].squeeze(1),
+            "play_q_values": output["play_q_values"].squeeze(1),
             "masked_q_values": output["masked_q_values"].squeeze(1),
             "state_value": output["state_value"].squeeze(1),
+            "bet_state_value": output["bet_state_value"].squeeze(1),
+            "play_state_value": output["play_state_value"].squeeze(1),
             "advantages": output["advantages"].squeeze(1),
+            "bet_advantages": output["bet_advantages"].squeeze(1),
+            "play_advantages": output["play_advantages"].squeeze(1),
             "action_mask": output["action_mask"].squeeze(1),
             "padding_mask": output["padding_mask"].squeeze(1),
             "state_vector": output["state_vector"].squeeze(1),

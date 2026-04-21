@@ -36,6 +36,7 @@ class FeedForwardReplayBuffer:
             "action": torch.tensor([transition["action"] for transition in transitions], dtype=torch.long),
             "reward": torch.tensor([transition["reward"] for transition in transitions], dtype=torch.float32),
             "done": torch.tensor([transition["done"] for transition in transitions], dtype=torch.bool),
+            "n_steps": torch.tensor([transition.get("n_steps", 1) for transition in transitions], dtype=torch.float32),
             "action_mask": torch.stack([transition["action_mask"] for transition in transitions], dim=0).to(torch.bool),
             "next_action_mask": torch.stack(
                 [transition["next_action_mask"] for transition in transitions],
@@ -73,6 +74,7 @@ class RecurrentReplayBuffer:
         action = torch.zeros((batch_size, max_len), dtype=torch.long)
         reward = torch.zeros((batch_size, max_len), dtype=torch.float32)
         done = torch.ones((batch_size, max_len), dtype=torch.bool)
+        n_steps = torch.ones((batch_size, max_len), dtype=torch.float32)
         padding_mask = torch.zeros((batch_size, max_len), dtype=torch.bool)
         action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
         next_action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
@@ -87,6 +89,7 @@ class RecurrentReplayBuffer:
             action[batch_index, :truncated_len] = torch.tensor(sequence["action"][:truncated_len], dtype=torch.long)
             reward[batch_index, :truncated_len] = torch.tensor(sequence["reward"][:truncated_len], dtype=torch.float32)
             done[batch_index, :truncated_len] = torch.tensor(sequence["done"][:truncated_len], dtype=torch.bool)
+            n_steps[batch_index, :truncated_len] = torch.tensor(sequence.get("n_steps", [1] * truncated_len)[:truncated_len], dtype=torch.float32)
             padding_mask[batch_index, :truncated_len] = True
             action_mask[batch_index, :truncated_len] = torch.stack(sequence["action_mask"][:truncated_len], dim=0).to(torch.bool)
             next_action_mask[batch_index, :truncated_len] = torch.stack(
@@ -100,6 +103,7 @@ class RecurrentReplayBuffer:
             "action": action,
             "reward": reward,
             "done": done,
+            "n_steps": n_steps,
             "padding_mask": padding_mask,
             "action_mask": action_mask,
             "next_action_mask": next_action_mask,

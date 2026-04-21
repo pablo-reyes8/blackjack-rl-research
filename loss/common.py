@@ -5,6 +5,7 @@ from typing import Any, Mapping
 import torch
 from torch import nn
 
+from enviroment_bj.core import BET_ACTION_ORDER
 from model.agents.common import apply_action_mask
 
 from .config import BellmanLossConfig
@@ -143,6 +144,61 @@ def build_metrics(
         "next_legal_fraction": float(valid_next_has_legal.float().mean().item()),
         "num_valid_rows": float(valid_rows.sum().item()),
     }
+
+
+def resolve_n_steps_tensor(batch: Mapping[str, Any], reference: torch.Tensor) -> torch.Tensor:
+    n_steps = batch.get("n_steps")
+    if n_steps is None:
+        return torch.ones_like(reference, dtype=torch.float32)
+    if not isinstance(n_steps, torch.Tensor):
+        n_steps = torch.tensor(n_steps, dtype=torch.float32, device=reference.device)
+    n_steps = n_steps.to(device=reference.device, dtype=torch.float32)
+    if n_steps.shape != reference.shape:
+        raise ValueError("n_steps must have the same shape as reward/done")
+    return n_steps
+
+
+def build_phase_weight_tensor(action: torch.Tensor, config: BellmanLossConfig) -> torch.Tensor:
+    betting_mask = action < len(BET_ACTION_ORDER)
+    weights = torch.where(
+        betting_mask,
+        torch.full_like(action, config.phase_weights.betting_weight, dtype=torch.float32),
+        torch.full_like(action, config.phase_weights.playing_weight, dtype=torch.float32),
+    )
+    return weights.to(torch.float32)
+
+
+def build_phase_metrics(
+    *,
+    action: torch.Tensor,
+    loss_values: torch.Tensor,
+    td_error: torch.Tensor,
+    valid_rows: torch.Tensor,
+) -> dict[str, float]:
+    valid_rows = ensure_bool_mask(valid_rows, name="valid_rows")
+    betting_mask = (action < len(BET_ACTION_ORDER)) & valid_rows
+    playing_mask = (action >= len(BET_ACTION_ORDER)) & valid_rows
+
+    metrics = {
+        "betting_fraction": float(betting_mask.float().sum().item() / max(valid_rows.float().sum().item(), 1.0)),
+        "playing_fraction": float(playing_mask.float().sum().item() / max(valid_rows.float().sum().item(), 1.0)),
+    }
+
+    if betting_mask.any():
+        metrics["loss_betting"] = float(loss_values[betting_mask].detach().mean().item())
+        metrics["mean_abs_td_error_betting"] = float(td_error[betting_mask].detach().abs().mean().item())
+    else:
+        metrics["loss_betting"] = 0.0
+        metrics["mean_abs_td_error_betting"] = 0.0
+
+    if playing_mask.any():
+        metrics["loss_playing"] = float(loss_values[playing_mask].detach().mean().item())
+        metrics["mean_abs_td_error_playing"] = float(td_error[playing_mask].detach().abs().mean().item())
+    else:
+        metrics["loss_playing"] = 0.0
+        metrics["mean_abs_td_error_playing"] = 0.0
+
+    return metrics
 
 
 def resolve_mask(batch: Mapping[str, Any], key: str, fallback_output: Mapping[str, Any] | None = None) -> torch.Tensor:

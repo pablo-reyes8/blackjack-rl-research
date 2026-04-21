@@ -14,11 +14,11 @@ from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, Recurr
 from .checkpoints import CheckpointManager
 from .config import TrainingPipelineConfig
 from .env_factory import clone_environments, normalize_envs
-from .epsilon import EpsilonScheduler
+from .epsilon import DualEpsilonScheduler
 from .evaluation import evaluate_policy
 from .logging import TrainingLogger
 from .metrics import BehaviorMetricsTracker, ScalarMetricAccumulator
-from .policy import action_name_from_index, select_epsilon_greedy_action
+from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
 from .replay_buffer import FeedForwardReplayBuffer, RecurrentReplayBuffer
 from .step import build_optimizer, build_scheduler, hard_update_target, maybe_update_target, train_gradient_step
 
@@ -30,6 +30,7 @@ class EnvironmentRunnerState:
     encoded_response: dict[str, Any] | None = None
     hidden_state: Any = None
     pending_sequence: list[dict[str, Any]] = field(default_factory=list)
+    pending_n_step: list[dict[str, Any]] = field(default_factory=list)
 
 
 class BlackjackRLTrainer:
@@ -53,7 +54,7 @@ class BlackjackRLTrainer:
         hard_update_target(self.online_network, self.target_network)
         self.optimizer = optimizer or build_optimizer(self.online_network, self.pipeline_config.optimization)
         self.scheduler = scheduler or build_scheduler(self.optimizer, self.pipeline_config.optimization)
-        self.epsilon_scheduler = EpsilonScheduler(self.pipeline_config.epsilon)
+        self.epsilon_scheduler = DualEpsilonScheduler(self.pipeline_config.epsilon)
         self.rng = random.Random(self.pipeline_config.trainer.seed)
         self.logger = TrainingLogger(self.pipeline_config.prints)
         self.checkpoints = CheckpointManager(self.pipeline_config.checkpoints)
@@ -103,6 +104,62 @@ class BlackjackRLTrainer:
             "device": str(self.device),
         }
 
+    def _n_step_enabled(self) -> bool:
+        return self.pipeline_config.n_step.enabled and self.pipeline_config.n_step.n_steps > 1
+
+    def _build_n_step_transition(self, transitions: list[dict[str, Any]]) -> dict[str, Any]:
+        reward = 0.0
+        steps_used = 0
+        gamma = self.pipeline_config.trainer.loss.gamma
+        max_n_steps = self.pipeline_config.n_step.n_steps
+        last_transition = transitions[0]
+
+        for step_index, transition in enumerate(transitions[:max_n_steps]):
+            reward += (gamma ** step_index) * float(transition["reward"])
+            steps_used += 1
+            last_transition = transition
+            if transition["done"]:
+                break
+
+        return {
+            **transitions[0],
+            "reward": reward,
+            "done": bool(last_transition["done"]),
+            "next_state": last_transition["next_state"],
+            "next_action_mask": last_transition["next_action_mask"],
+            "n_steps": steps_used,
+        }
+
+    def _store_processed_transition(self, env_state: EnvironmentRunnerState, transition: dict[str, Any]) -> None:
+        if self.is_recurrent:
+            env_state.pending_sequence.append(transition)
+            should_finalize = len(env_state.pending_sequence) >= self.pipeline_config.replay_buffer.sequence_length
+            if self.pipeline_config.trainer.sequence_end_on_done and transition["done"]:
+                should_finalize = True
+            if should_finalize:
+                self._commit_pending_sequence(env_state)
+            return
+
+        self.replay_buffer.add(transition)
+
+    def _store_transition(self, env_state: EnvironmentRunnerState, transition: dict[str, Any]) -> None:
+        if not self._n_step_enabled():
+            self._store_processed_transition(env_state, {**transition, "n_steps": 1})
+            return
+
+        env_state.pending_n_step.append(transition)
+        if transition["done"]:
+            while env_state.pending_n_step:
+                processed = self._build_n_step_transition(env_state.pending_n_step)
+                self._store_processed_transition(env_state, processed)
+                env_state.pending_n_step.pop(0)
+            return
+
+        if len(env_state.pending_n_step) >= self.pipeline_config.n_step.n_steps:
+            processed = self._build_n_step_transition(env_state.pending_n_step)
+            self._store_processed_transition(env_state, processed)
+            env_state.pending_n_step.pop(0)
+
     def _buffer_ready(self) -> bool:
         return len(self.replay_buffer) >= self.pipeline_config.replay_buffer.warmup_size and self.replay_buffer.can_sample()
 
@@ -135,7 +192,9 @@ class BlackjackRLTrainer:
         parameter_count = sum(parameter.numel() for parameter in self.online_network.parameters())
         return {
             "architecture": model_config.architecture,
-            "recurrent_type": getattr(model_config, "recurrent_type", "none"),
+            "recurrent_type": getattr(model_config, "recurrent_type", "none")
+            if model_config.architecture != "feedforward"
+            else "none",
             "encoder_profile": model_config.encoder.profile,
             "observation_profile": reference_env.config.observation.profile,
             "start_state_mode": reference_env.start_state.mode,
@@ -156,15 +215,28 @@ class BlackjackRLTrainer:
             "batch_size": self.pipeline_config.replay_buffer.batch_size,
             "sequence_length": self.pipeline_config.replay_buffer.sequence_length,
             "min_sequence_length": self.pipeline_config.replay_buffer.min_sequence_length,
-            "epsilon_start": self.pipeline_config.epsilon.start,
-            "epsilon_end": self.pipeline_config.epsilon.end,
-            "epsilon_decay_steps": self.pipeline_config.epsilon.decay_steps,
+            "epsilon_betting_start": self.pipeline_config.epsilon.betting.start,
+            "epsilon_betting_end": self.pipeline_config.epsilon.betting.end,
+            "epsilon_betting_decay_steps": self.pipeline_config.epsilon.betting.decay_steps,
+            "epsilon_playing_start": self.pipeline_config.epsilon.playing.start,
+            "epsilon_playing_end": self.pipeline_config.epsilon.playing.end,
+            "epsilon_playing_decay_steps": self.pipeline_config.epsilon.playing.decay_steps,
+            "epsilon_start": self.pipeline_config.epsilon.playing.start,
+            "epsilon_end": self.pipeline_config.epsilon.playing.end,
+            "epsilon_decay_steps": self.pipeline_config.epsilon.playing.decay_steps,
             "target_update_mode": self.pipeline_config.target_update.mode,
             "target_hard_interval": self.pipeline_config.target_update.hard_update_interval,
             "target_soft_tau": self.pipeline_config.target_update.soft_tau,
             "eval_rounds": self.pipeline_config.evaluation.num_rounds,
             "eval_max_decisions": self.pipeline_config.evaluation.max_decisions,
             "checkpoint_dir": str(self.pipeline_config.checkpoints.directory_path),
+            "n_step_enabled": self.pipeline_config.n_step.enabled,
+            "n_step_size": self.pipeline_config.n_step.n_steps,
+            "phase_loss_weights_enabled": self.pipeline_config.trainer.loss.phase_weights.enabled,
+            "betting_loss_weight": self.pipeline_config.trainer.loss.phase_weights.betting_weight,
+            "playing_loss_weight": self.pipeline_config.trainer.loss.phase_weights.playing_weight,
+            "use_module_gating": bool(getattr(model_config, "use_module_gating", False)),
+            "use_phase_adapters": bool(getattr(model_config, "use_phase_adapters", False)),
             "n_decks": reference_env.config.n_decks,
             "shoe_penetration": reference_env.config.shoe_penetration,
             "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
@@ -234,7 +306,7 @@ class BlackjackRLTrainer:
         *,
         num_steps: int,
         tracker: BehaviorMetricsTracker,
-        epsilon: float,
+        epsilon: float | None = None,
     ) -> None:
         online_was_training, target_was_training = self._temporary_eval_mode()
         try:
@@ -250,11 +322,13 @@ class BlackjackRLTrainer:
                 for env_index, env_state in enumerate(self.env_states):
                     masked_q_values = masked_q_values_batch[env_index]
                     action_mask = action_mask_batch[env_index]
+                    decision_phase = infer_decision_phase(env_state.response)
+                    epsilon_value = epsilon if epsilon is not None else self.epsilon_scheduler.value(decision_phase)
 
                     action_index, was_random = select_epsilon_greedy_action(
                         masked_q_values=masked_q_values,
                         action_mask=action_mask,
-                        epsilon=epsilon,
+                        epsilon=epsilon_value,
                         rng=self.rng,
                     )
                     action_name = action_name_from_index(action_index, ACTION_ORDER)
@@ -264,13 +338,20 @@ class BlackjackRLTrainer:
                         if "shoe is empty" not in str(exc).lower() and "round is over" not in str(exc).lower():
                             raise
                         env_state.response = None
+                        env_state.pending_n_step = []
                         continue
 
                     table_key = f"{env_state.env.start_state.mode}|{env_state.env.config.observation.profile}"
-                    tracker.record_decision(env_state.response, action_name, was_random=was_random, table_key=table_key)
-                    tracker.record_round_result(next_response)
+                    tracker.record_decision(
+                        env_state.response,
+                        action_name,
+                        was_random=was_random,
+                        table_key=table_key,
+                        env_key=str(env_index),
+                    )
+                    tracker.record_round_result(next_response, env_key=str(env_index))
                     self.env_step_count += 1
-                    self.epsilon_scheduler.step()
+                    self.epsilon_scheduler.step(decision_phase)
                     encoded_next_response = self._encode_response_for_storage(next_response)
 
                     transition = {
@@ -283,15 +364,7 @@ class BlackjackRLTrainer:
                         "next_action_mask": encoded_next_response["action_mask"],
                     }
 
-                    if self.is_recurrent:
-                        env_state.pending_sequence.append(transition)
-                        should_finalize = len(env_state.pending_sequence) >= self.pipeline_config.replay_buffer.sequence_length
-                        if self.pipeline_config.trainer.sequence_end_on_done and next_response["done"]:
-                            should_finalize = True
-                        if should_finalize:
-                            self._commit_pending_sequence(env_state)
-                    else:
-                        self.replay_buffer.add(transition)
+                    self._store_transition(env_state, transition)
 
                     if next_response["done"]:
                         env_state.response = None
@@ -307,9 +380,11 @@ class BlackjackRLTrainer:
     def _ensure_active_response(self, env_state: EnvironmentRunnerState, tracker: BehaviorMetricsTracker) -> None:
         while env_state.response is None or env_state.response["done"]:
             if env_state.response is not None and env_state.response["done"]:
-                tracker.record_round_result(env_state.response)
                 if self.is_recurrent and self.pipeline_config.trainer.reset_hidden_on_round_end:
                     env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
+
+            if env_state.response is None and env_state.pending_n_step:
+                env_state.pending_n_step = []
 
             env_state.response = env_state.env.reset()
             env_state.encoded_response = self._encode_response_for_storage(env_state.response)
@@ -321,7 +396,7 @@ class BlackjackRLTrainer:
             return
         sequence = {
             key: [step[key] for step in env_state.pending_sequence]
-            for key in ("state", "next_state", "action", "reward", "done", "action_mask", "next_action_mask")
+            for key in ("state", "next_state", "action", "reward", "done", "action_mask", "next_action_mask", "n_steps")
         }
         self.replay_buffer.add(sequence)
         env_state.pending_sequence = []
@@ -354,7 +429,8 @@ class BlackjackRLTrainer:
         metrics.update(
             {
                 "buffer_size": float(len(self.replay_buffer)),
-                "epsilon": self.epsilon_scheduler.value(),
+                **self.epsilon_scheduler.current_values(),
+                "epsilon": self.epsilon_scheduler.current_values()["epsilon_playing"],
                 "target_synced": float(target_synced),
             }
         )
@@ -369,7 +445,7 @@ class BlackjackRLTrainer:
         return evaluate_policy(
             envs=eval_envs,
             model=self.online_network,
-            epsilon=self.pipeline_config.epsilon.evaluation_epsilon,
+            epsilon=self.pipeline_config.epsilon,
             num_rounds=self.pipeline_config.evaluation.num_rounds,
             max_decisions=self.pipeline_config.evaluation.max_decisions,
             rng=random.Random(self.pipeline_config.trainer.seed + self.epoch_index),
@@ -393,7 +469,7 @@ class BlackjackRLTrainer:
 
         for step_in_epoch in range(1, self.pipeline_config.trainer.env_steps_per_epoch + 1):
             env_steps_before_collect = self.env_step_count
-            self.collect_experience(num_steps=1, tracker=behavior_tracker, epsilon=self.epsilon_scheduler.value())
+            self.collect_experience(num_steps=1, tracker=behavior_tracker)
             self.logger.log_collection(
                 env_step_in_epoch=step_in_epoch,
                 total_env_steps_in_epoch=self.pipeline_config.trainer.env_steps_per_epoch,
@@ -439,7 +515,8 @@ class BlackjackRLTrainer:
             "updates": float(self.update_count),
             "updates_this_epoch": float(updates_this_epoch),
             "buffer_size": float(len(self.replay_buffer)),
-            "epsilon": self.epsilon_scheduler.value(),
+            **self.epsilon_scheduler.current_values(),
+            "epsilon": self.epsilon_scheduler.current_values()["epsilon_playing"],
             "learning_rate": float(self.optimizer.param_groups[0]["lr"]),
         }
 

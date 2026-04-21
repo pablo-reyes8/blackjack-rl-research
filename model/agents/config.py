@@ -20,6 +20,8 @@ class AgentNetworkConfig:
     head_hidden_dim: int = 128
     value_hidden_dim: int = 128
     advantage_hidden_dim: int = 128
+    use_phase_adapters: bool = True
+    use_module_gating: bool = True
 
     def __post_init__(self) -> None:
         if self.architecture not in {"feedforward", "recurrent", "dueling_recurrent"}:

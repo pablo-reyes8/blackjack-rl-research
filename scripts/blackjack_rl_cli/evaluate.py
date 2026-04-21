@@ -56,7 +56,7 @@ def main() -> None:
     evaluation_seed = args.seed if args.seed is not None else checkpoint_pipeline.trainer.seed + 1000
     num_rounds = args.num_rounds if args.num_rounds is not None else checkpoint_pipeline.evaluation.num_rounds
     max_decisions = args.max_decisions if args.max_decisions is not None else checkpoint_pipeline.evaluation.max_decisions
-    epsilon = args.epsilon if args.epsilon is not None else checkpoint_pipeline.epsilon.evaluation_epsilon
+    epsilon = args.epsilon if args.epsilon is not None else checkpoint_pipeline.epsilon
 
     metrics = evaluate_policy(
         envs=setup["envs"],

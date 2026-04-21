@@ -9,7 +9,7 @@ import torch
 from enviroment_bj.core import ACTION_ORDER
 
 from .metrics import BehaviorMetricsTracker
-from .policy import action_name_from_index, select_epsilon_greedy_action
+from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
 
 
 @dataclass(slots=True)
@@ -42,7 +42,6 @@ def evaluate_policy(
                     break
                 while env_state.response is None or env_state.response["done"]:
                     if env_state.response is not None and env_state.response["done"]:
-                        tracker.record_round_result(env_state.response)
                         if is_recurrent and reset_hidden_on_round_end:
                             env_state.hidden_state = model.init_hidden(batch_size=1)
                     env_state.response = env_state.env.reset()
@@ -59,10 +58,13 @@ def evaluate_policy(
                     action_mask = model_output["action_mask"].squeeze(0)
                     masked_q_values = model_output["masked_q_values"].squeeze(0)
 
+                decision_phase = infer_decision_phase(env_state.response)
+                epsilon_value = resolve_epsilon_value(epsilon, decision_phase=decision_phase, evaluation=True)
+
                 action_index, was_random = select_epsilon_greedy_action(
                     masked_q_values=masked_q_values,
                     action_mask=action_mask,
-                    epsilon=epsilon,
+                    epsilon=epsilon_value,
                     rng=rng,
                 )
                 action_name = action_name_from_index(action_index, ACTION_ORDER)
@@ -75,8 +77,14 @@ def evaluate_policy(
                     continue
 
                 table_key = f"{env_state.env.start_state.mode}|{env_state.env.config.observation.profile}"
-                tracker.record_decision(env_state.response, action_name, was_random=was_random, table_key=table_key)
-                tracker.record_round_result(next_response)
+                tracker.record_decision(
+                    env_state.response,
+                    action_name,
+                    was_random=was_random,
+                    table_key=table_key,
+                    env_key=str(id(env_state.env)),
+                )
+                tracker.record_round_result(next_response, env_key=str(id(env_state.env)))
                 decisions += 1
 
                 if next_response["done"]:

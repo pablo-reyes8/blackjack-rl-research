@@ -9,6 +9,7 @@ from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConf
 from enviroment_bj.core import ACTION_ORDER
 from loss import (
     BellmanLossConfig,
+    LossPhaseWeightConfig,
     compute_double_dqn_targets_feedforward,
     compute_td_loss_feedforward,
     compute_td_loss_recurrent,
@@ -281,6 +282,85 @@ class BlackjackBellmanLossTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss_info["loss"]).item())
         self.assertTrue(torch.isfinite(loss_info["target"]).all().item())
         self.assertEqual(float(loss_info["target"].item()), 1_000_000.0)
+
+    def test_feedforward_targets_support_n_step_discounting(self) -> None:
+        num_actions = len(ACTION_ORDER)
+        online_network = FixedFeedForwardNet(
+            {
+                "state": torch.zeros((1, num_actions), dtype=torch.float32),
+                "next": torch.tensor([[0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+            }
+        )
+        target_network = FixedFeedForwardNet(
+            {
+                "state": torch.zeros((1, num_actions), dtype=torch.float32),
+                "next": torch.tensor([[0.0, 0.0, 7.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+            }
+        )
+        batch = {
+            "state": {"phase": "state"},
+            "next_state": {"phase": "next"},
+            "action": torch.tensor([ACTION_ORDER.index("bet_1x")], dtype=torch.long),
+            "reward": torch.tensor([2.0], dtype=torch.float32),
+            "done": torch.tensor([False], dtype=torch.bool),
+            "n_steps": torch.tensor([3.0], dtype=torch.float32),
+            "action_mask": torch.ones((1, num_actions), dtype=torch.bool),
+            "next_action_mask": torch.tensor([[1, 0, 1, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.bool),
+        }
+
+        target_info = compute_double_dqn_targets_feedforward(online_network, target_network, batch, gamma=0.5)
+
+        self.assertAlmostEqual(float(target_info["target"].item()), 2.875, places=6)
+
+    def test_feedforward_loss_supports_phase_weighting(self) -> None:
+        num_actions = len(ACTION_ORDER)
+        online_network = FixedFeedForwardNet(
+            {
+                "state": torch.zeros((2, num_actions), dtype=torch.float32),
+                "next": torch.zeros((2, num_actions), dtype=torch.float32),
+            }
+        )
+        target_network = FixedFeedForwardNet(
+            {
+                "state": torch.zeros((2, num_actions), dtype=torch.float32),
+                "next": torch.zeros((2, num_actions), dtype=torch.float32),
+            }
+        )
+        batch = {
+            "state": {"phase": "state"},
+            "next_state": {"phase": "next"},
+            "action": torch.tensor([ACTION_ORDER.index("bet_1x"), ACTION_ORDER.index("stand")], dtype=torch.long),
+            "reward": torch.tensor([1.0, 1.0], dtype=torch.float32),
+            "done": torch.tensor([True, True], dtype=torch.bool),
+            "action_mask": torch.ones((2, num_actions), dtype=torch.bool),
+            "next_action_mask": torch.zeros((2, num_actions), dtype=torch.bool),
+        }
+
+        unweighted = compute_td_loss_feedforward(
+            online_network,
+            target_network,
+            batch,
+            gamma=0.99,
+            config=BellmanLossConfig(
+                gamma=0.99,
+                phase_weights=LossPhaseWeightConfig(enabled=False, betting_weight=1.5, playing_weight=1.0),
+            ),
+        )
+        weighted = compute_td_loss_feedforward(
+            online_network,
+            target_network,
+            batch,
+            gamma=0.99,
+            config=BellmanLossConfig(
+                gamma=0.99,
+                phase_weights=LossPhaseWeightConfig(enabled=True, betting_weight=1.5, playing_weight=1.0),
+            ),
+        )
+
+        self.assertAlmostEqual(float(unweighted["loss"].item()), 0.5, places=6)
+        self.assertAlmostEqual(float(weighted["loss"].item()), 0.625, places=6)
+        self.assertGreater(weighted["metrics"]["loss_betting"], 0.0)
+        self.assertGreater(weighted["metrics"]["loss_playing"], 0.0)
 
     def test_recurrent_loss_ignores_padding(self) -> None:
         num_actions = len(ACTION_ORDER)

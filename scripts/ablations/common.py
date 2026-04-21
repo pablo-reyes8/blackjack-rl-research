@@ -32,8 +32,10 @@ from loss import BellmanLossConfig  # noqa: E402
 from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN  # noqa: E402
 from training import (  # noqa: E402
     CheckpointConfig,
+    DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
+    NStepConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -135,13 +137,29 @@ def _build_pipeline_config(spec: dict[str, Any], output_dir: Path) -> TrainingPi
     checkpoint_data = training["checkpoints"]
     print_data = training["prints"]
     loss_data = trainer_data.pop("loss")
+    phase_weights_data = loss_data.pop("phase_weights", None)
+    if phase_weights_data is not None:
+        from loss import LossPhaseWeightConfig
+
+        loss_data["phase_weights"] = LossPhaseWeightConfig(**phase_weights_data)
 
     checkpoint_data["directory"] = str(output_dir)
+
+    if not epsilon_data:
+        epsilon = DualEpsilonConfig()
+    elif "betting" in epsilon_data or "playing" in epsilon_data:
+        epsilon = DualEpsilonConfig(
+            betting=EpsilonScheduleConfig(**epsilon_data.get("betting", {})),
+            playing=EpsilonScheduleConfig(**epsilon_data.get("playing", {})),
+        )
+    else:
+        epsilon = EpsilonScheduleConfig(**epsilon_data)
 
     return TrainingPipelineConfig(
         trainer=TrainerConfig(loss=BellmanLossConfig(**loss_data), **trainer_data),
         replay_buffer=ReplayBufferConfig(**replay_buffer_data),
-        epsilon=EpsilonScheduleConfig(**epsilon_data),
+        epsilon=epsilon,
+        n_step=NStepConfig(**training.get("n_step", {})),
         optimization=OptimizationConfig(**optimization_data),
         target_update=TargetUpdateConfig(**target_update_data),
         evaluation=EvaluationConfig(**evaluation_data),

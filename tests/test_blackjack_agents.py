@@ -84,8 +84,12 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         output = model(response)
 
         self.assertEqual(tuple(output["q_values"].shape), (1, len(ACTION_ORDER)))
+        self.assertEqual(tuple(output["bet_q_values"].shape), (1, model.num_bet_actions))
+        self.assertEqual(tuple(output["play_q_values"].shape), (1, model.num_play_actions))
         self.assertEqual(tuple(output["masked_q_values"].shape), (1, len(ACTION_ORDER)))
         self.assertEqual(tuple(output["state_vector"].shape), (1, model.state_dim))
+        self.assertTrue(torch.equal(output["q_values"][:, model.bet_action_slice], output["bet_q_values"]))
+        self.assertTrue(torch.equal(output["q_values"][:, model.play_action_slice], output["play_q_values"]))
         self.assertTrue(torch.equal(output["action_mask"], torch.tensor(response["action_mask"], dtype=torch.bool).unsqueeze(0)))
         illegal_mask = ~output["action_mask"]
         self.assertTrue((output["masked_q_values"][illegal_mask] < -1e20).all().item())
@@ -93,6 +97,22 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         loss = output["q_values"].mean()
         loss.backward()
         self.assert_has_gradients(model)
+
+    def test_feedforward_supports_optional_phase_adapters_and_module_gating(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        env.load_shoe(["10", "6", "7", "10"], total_cards=4)
+        response = env.reset()
+
+        model = FeedForwardDoubleDQN.from_profile(
+            "table_realistic_default",
+            use_phase_adapters=True,
+            use_module_gating=True,
+        )
+        output = model(response)
+
+        self.assertEqual(tuple(output["q_values"].shape), (1, len(ACTION_ORDER)))
+        self.assertEqual(tuple(output["bet_q_values"].shape), (1, model.num_bet_actions))
+        self.assertEqual(tuple(output["play_q_values"].shape), (1, model.num_play_actions))
 
     def test_recurrent_double_dqn_gru_forward_and_backward_with_padding(self) -> None:
         sequences = self.build_realistic_sequences()
@@ -103,9 +123,13 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
 
         self.assertEqual(tuple(output["q_values"].shape[:2]), tuple(output["padding_mask"].shape))
         self.assertEqual(output["q_values"].shape[-1], len(ACTION_ORDER))
+        self.assertEqual(output["bet_q_values"].shape[-1], model.num_bet_actions)
+        self.assertEqual(output["play_q_values"].shape[-1], model.num_play_actions)
         self.assertEqual(tuple(output["action_mask"].shape), tuple(output["q_values"].shape))
         self.assertEqual(tuple(output["state_vector"].shape[-2:]), (output["q_values"].shape[1], model.state_dim))
         self.assertEqual(tuple(output["hidden_state"].shape), (1, 2, model.config.recurrent_hidden_dim))
+        self.assertTrue(torch.equal(output["q_values"][..., model.bet_action_slice], output["bet_q_values"]))
+        self.assertTrue(torch.equal(output["q_values"][..., model.play_action_slice], output["play_q_values"]))
         illegal_mask = ~output["action_mask"]
         self.assertTrue((output["masked_q_values"][illegal_mask] < -1e20).all().item())
 
@@ -125,8 +149,18 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         batch_output = model(sequences)
         self.assertEqual(tuple(batch_output["q_values"].shape[:2]), tuple(batch_output["padding_mask"].shape))
         self.assertEqual(batch_output["q_values"].shape[-1], len(ACTION_ORDER))
+        self.assertEqual(batch_output["bet_q_values"].shape[-1], model.num_bet_actions)
+        self.assertEqual(batch_output["play_q_values"].shape[-1], model.num_play_actions)
         self.assertEqual(batch_output["state_value"].shape[-1], 1)
+        self.assertEqual(batch_output["bet_state_value"].shape[-1], 1)
+        self.assertEqual(batch_output["play_state_value"].shape[-1], 1)
         self.assertEqual(tuple(batch_output["advantages"].shape), tuple(batch_output["q_values"].shape))
+        self.assertEqual(tuple(batch_output["bet_advantages"].shape[:-1]), tuple(batch_output["q_values"].shape[:-1]))
+        self.assertEqual(tuple(batch_output["play_advantages"].shape[:-1]), tuple(batch_output["q_values"].shape[:-1]))
+        self.assertTrue(torch.equal(batch_output["q_values"][..., model.bet_action_slice], batch_output["bet_q_values"]))
+        self.assertTrue(torch.equal(batch_output["q_values"][..., model.play_action_slice], batch_output["play_q_values"]))
+        self.assertTrue(torch.equal(batch_output["advantages"][..., model.bet_action_slice], batch_output["bet_advantages"]))
+        self.assertTrue(torch.equal(batch_output["advantages"][..., model.play_action_slice], batch_output["play_advantages"]))
         self.assertIsInstance(batch_output["hidden_state"], tuple)
         self.assertEqual(len(batch_output["hidden_state"]), 2)
 
@@ -143,8 +177,14 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         step_output = model.forward_step(step_response, hidden_state=model.init_hidden(batch_size=1))
 
         self.assertEqual(tuple(step_output["q_values"].shape), (1, len(ACTION_ORDER)))
+        self.assertEqual(tuple(step_output["bet_q_values"].shape), (1, model.num_bet_actions))
+        self.assertEqual(tuple(step_output["play_q_values"].shape), (1, model.num_play_actions))
         self.assertEqual(tuple(step_output["state_value"].shape), (1, 1))
+        self.assertEqual(tuple(step_output["bet_state_value"].shape), (1, 1))
+        self.assertEqual(tuple(step_output["play_state_value"].shape), (1, 1))
         self.assertEqual(tuple(step_output["advantages"].shape), (1, len(ACTION_ORDER)))
+        self.assertTrue(torch.equal(step_output["q_values"][:, model.bet_action_slice], step_output["bet_q_values"]))
+        self.assertTrue(torch.equal(step_output["q_values"][:, model.play_action_slice], step_output["play_q_values"]))
         self.assertNotIn("estimated_shoe_progress", step_response["observation"]["temporal_context"])
 
         valid_steps = batch_output["padding_mask"].unsqueeze(-1).to(batch_output["q_values"].dtype)

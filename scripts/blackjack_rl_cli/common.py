@@ -21,8 +21,10 @@ from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForw
 from model.encoder import EncoderConfig
 from training import (
     CheckpointConfig,
+    DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
+    NStepConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -178,10 +180,25 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
     trainer_data = _ensure_mapping(values.get("trainer"), context="training.trainer")
     loss_data = _ensure_mapping(trainer_data.pop("loss", None), context="training.trainer.loss")
     if loss_data:
+        phase_weights_data = _ensure_mapping(loss_data.pop("phase_weights", None), context="training.trainer.loss.phase_weights")
+        if phase_weights_data:
+            from loss import LossPhaseWeightConfig
+
+            loss_data["phase_weights"] = LossPhaseWeightConfig(**phase_weights_data)
         trainer_data["loss"] = BellmanLossConfig(**loss_data)
 
     replay_buffer = ReplayBufferConfig(**_ensure_mapping(values.get("replay_buffer"), context="training.replay_buffer"))
-    epsilon = EpsilonScheduleConfig(**_ensure_mapping(values.get("epsilon"), context="training.epsilon"))
+    epsilon_data = _ensure_mapping(values.get("epsilon"), context="training.epsilon")
+    if not epsilon_data:
+        epsilon = DualEpsilonConfig()
+    elif "betting" in epsilon_data or "playing" in epsilon_data:
+        epsilon = DualEpsilonConfig(
+            betting=EpsilonScheduleConfig(**_ensure_mapping(epsilon_data.get("betting"), context="training.epsilon.betting")),
+            playing=EpsilonScheduleConfig(**_ensure_mapping(epsilon_data.get("playing"), context="training.epsilon.playing")),
+        )
+    else:
+        epsilon = EpsilonScheduleConfig(**epsilon_data)
+    n_step = NStepConfig(**_ensure_mapping(values.get("n_step"), context="training.n_step"))
     optimization = OptimizationConfig(**_ensure_mapping(values.get("optimization"), context="training.optimization"))
     target_update = TargetUpdateConfig(**_ensure_mapping(values.get("target_update"), context="training.target_update"))
     evaluation = EvaluationConfig(**_ensure_mapping(values.get("evaluation"), context="training.evaluation"))
@@ -192,6 +209,7 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
         trainer=TrainerConfig(**trainer_data),
         replay_buffer=replay_buffer,
         epsilon=epsilon,
+        n_step=n_step,
         optimization=optimization,
         target_update=target_update,
         evaluation=evaluation,

@@ -61,15 +61,25 @@ class TrainingLoggingTests(unittest.TestCase):
                     "batch_size": 32,
                     "sequence_length": 16,
                     "min_sequence_length": 4,
-                    "epsilon_start": 1.0,
-                    "epsilon_end": 0.05,
-                    "epsilon_decay_steps": 100000,
+                    "epsilon_betting_start": 1.0,
+                    "epsilon_betting_end": 0.10,
+                    "epsilon_betting_decay_steps": 120000,
+                    "epsilon_playing_start": 1.0,
+                    "epsilon_playing_end": 0.03,
+                    "epsilon_playing_decay_steps": 80000,
                     "target_update_mode": "hard",
                     "target_hard_interval": 1000,
                     "target_soft_tau": 0.005,
                     "eval_rounds": 500,
                     "eval_max_decisions": 50000,
                     "checkpoint_dir": "checkpoints/run_a",
+                    "n_step_enabled": True,
+                    "n_step_size": 3,
+                    "phase_loss_weights_enabled": True,
+                    "betting_loss_weight": 1.5,
+                    "playing_loss_weight": 1.0,
+                    "use_module_gating": False,
+                    "use_phase_adapters": False,
                     "n_decks": 6,
                     "shoe_penetration": 0.8,
                     "dealer_hits_soft_17": False,
@@ -88,8 +98,15 @@ class TrainingLoggingTests(unittest.TestCase):
                     "mean_q_pred": 0.5,
                     "mean_target": 0.7,
                     "mean_abs_td_error": 0.2,
+                    "mean_abs_td_error_betting": 0.3,
+                    "mean_abs_td_error_playing": 0.1,
                     "grad_norm": 1.5,
-                    "epsilon": 0.9,
+                    "epsilon_betting": 0.9,
+                    "epsilon_playing": 0.7,
+                    "loss_betting": 0.2,
+                    "loss_playing": 0.1,
+                    "mean_n_steps": 1.5,
+                    "mean_phase_weight": 1.2,
                     "learning_rate": 3e-4,
                     "update_time_sec": 0.25,
                     "buffer_size": 200,
@@ -104,7 +121,17 @@ class TrainingLoggingTests(unittest.TestCase):
                     "grad_norm": 1.2,
                     "reward_per_round": 0.03,
                     "ev_per_1000_hands": 12.0,
-                    "epsilon": 0.8,
+                    "epsilon_betting": 0.8,
+                    "epsilon_playing": 0.6,
+                    "betting_decisions": 10,
+                    "playing_decisions": 30,
+                    "random_action_fraction_betting": 0.4,
+                    "random_action_fraction_playing": 0.2,
+                    "loss_betting": 0.22,
+                    "loss_playing": 0.11,
+                    "bet_action_frequencies": {"bet_1x": 0.5, "bet_2x": 0.3, "bet_3x": 0.1, "bet_4x": 0.1},
+                    "play_action_frequencies": {"stand": 0.4, "hit": 0.3, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
+                    "bet_ev_per_1000_rounds_by_action": {"bet_1x": 10.0, "bet_2x": 20.0, "bet_3x": -5.0, "bet_4x": -15.0},
                     "learning_rate": 3e-4,
                 }
             )
@@ -116,6 +143,11 @@ class TrainingLoggingTests(unittest.TestCase):
                     "push_rate": 0.08,
                     "loss_rate": 0.50,
                     "surrender_rate": 0.01,
+                    "random_action_fraction_betting": 0.1,
+                    "random_action_fraction_playing": 0.05,
+                    "bet_action_frequencies": {"bet_1x": 0.6, "bet_2x": 0.2, "bet_3x": 0.1, "bet_4x": 0.1},
+                    "play_action_frequencies": {"stand": 0.45, "hit": 0.25, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
+                    "bet_ev_per_1000_rounds_by_action": {"bet_1x": 15.0, "bet_2x": 30.0, "bet_3x": 5.0, "bet_4x": -10.0},
                 }
             )
             logger.log_checkpoint(
@@ -129,10 +161,15 @@ class TrainingLoggingTests(unittest.TestCase):
         output = buffer.getvalue()
         self.assertIn("Blackjack RL run | arch: recurrent | recurrent: lstm", output)
         self.assertIn("Device: cpu | epochs: 5 | envs: 1 | steps/epoch: 2000 | updates/epoch~: 500", output)
+        self.assertIn("eps_bet 1.000->0.100", output)
+        self.assertIn("eps_play 1.000->0.030", output)
         self.assertIn("=== Epoch 1/5 ===", output)
         self.assertIn("[train step 2/8]", output)
+        self.assertIn("phase loss bet 0.200000 | play 0.100000", output)
         self.assertIn("[Train] loss 0.120000", output)
+        self.assertIn("bets bet_1x:0.50 bet_2x:0.30 bet_3x:0.10 bet_4x:0.10", output)
         self.assertIn("[Val]   reward/round 0.0500", output)
+        self.assertIn("play stand:0.45 hit:0.25 double:0.10 split:0.10 surrender:0.05 insurance:0.05", output)
         self.assertIn("Best saved to checkpoints/best_eval.pt (ev_per_1000_hands 20.0000)", output)
         self.assertIn("Epoch time: 1.50 min", output)
 

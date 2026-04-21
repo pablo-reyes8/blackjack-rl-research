@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from math import floor
 from typing import Any
+
+from enviroment_bj.core import BET_ACTION_ORDER, PLAYING_ACTION_ORDER
 
 from .config import PrintConfig
 
@@ -17,6 +18,18 @@ class TrainingLogger:
     def _print(self, message: str) -> None:
         if self.config.enable:
             print(message)
+
+    def _format_action_distribution(self, metrics: dict[str, Any], key: str, actions: tuple[str, ...]) -> str:
+        frequencies = metrics.get(key) or {}
+        if not isinstance(frequencies, dict):
+            return "n/a"
+        return " ".join(f"{action}:{float(frequencies.get(action, 0.0)):.2f}" for action in actions)
+
+    def _format_bet_ev(self, metrics: dict[str, Any]) -> str:
+        values = metrics.get("bet_ev_per_1000_rounds_by_action") or {}
+        if not isinstance(values, dict):
+            return "n/a"
+        return " ".join(f"{action}:{float(values.get(action, 0.0)):+.1f}" for action in BET_ACTION_ORDER)
 
     def log_warmup(self, *, buffer_size: int, target_size: int, force: bool = False) -> None:
         if not self.config.enable:
@@ -74,11 +87,21 @@ class TrainingLogger:
         )
         self._print(
             "Explore/Target: "
-            f"eps {summary.get('epsilon_start', 0.0):.3f}->{summary.get('epsilon_end', 0.0):.3f} "
-            f"(decay {int(summary.get('epsilon_decay_steps', 0))}) | "
+            f"eps_bet {summary.get('epsilon_betting_start', 0.0):.3f}->{summary.get('epsilon_betting_end', 0.0):.3f} "
+            f"(decay {int(summary.get('epsilon_betting_decay_steps', 0))}) | "
+            f"eps_play {summary.get('epsilon_playing_start', 0.0):.3f}->{summary.get('epsilon_playing_end', 0.0):.3f} "
+            f"(decay {int(summary.get('epsilon_playing_decay_steps', 0))}) | "
             f"target {summary.get('target_update_mode')} | "
             f"interval {int(summary.get('target_hard_interval', 0))} | "
             f"tau {summary.get('target_soft_tau', 0.0):.4f}"
+        )
+        self._print(
+            "Training extras: "
+            f"n-step={summary.get('n_step_enabled', False)}({int(summary.get('n_step_size', 1))}) | "
+            f"phase_loss_w={summary.get('phase_loss_weights_enabled', False)} "
+            f"(bet {summary.get('betting_loss_weight', 0.0):.2f}, play {summary.get('playing_loss_weight', 0.0):.2f}) | "
+            f"phase_adapters={summary.get('use_phase_adapters', False)} | "
+            f"module_gating={summary.get('use_module_gating', False)}"
         )
         self._print(
             "Eval/CKPT: "
@@ -115,10 +138,20 @@ class TrainingLogger:
             f"target {metrics.get('mean_target', 0.0):.4f} | "
             f"td {metrics.get('mean_abs_td_error', 0.0):.4f} | "
             f"grad {metrics.get('grad_norm', 0.0):.4f} | "
-            f"eps {metrics.get('epsilon', 0.0):.4f} | "
+            f"eps_bet {metrics.get('epsilon_betting', 0.0):.4f} | "
+            f"eps_play {metrics.get('epsilon_playing', 0.0):.4f} | "
             f"lr {metrics.get('learning_rate', 0.0):.2e} | "
             f"upd/s {updates_per_sec:.1f} | "
             f"buffer {int(metrics.get('buffer_size', 0))}"
+        )
+        self._print(
+            "           "
+            f"phase loss bet {metrics.get('loss_betting', 0.0):.6f} | "
+            f"play {metrics.get('loss_playing', 0.0):.6f} | "
+            f"td_bet {metrics.get('mean_abs_td_error_betting', 0.0):.4f} | "
+            f"td_play {metrics.get('mean_abs_td_error_playing', 0.0):.4f} | "
+            f"n-step {metrics.get('mean_n_steps', 1.0):.2f} | "
+            f"w {metrics.get('mean_phase_weight', 1.0):.2f}"
         )
 
     def log_collection(
@@ -140,6 +173,18 @@ class TrainingLogger:
             f"reward/round {metrics.get('reward_per_round', 0.0):.4f} | "
             f"EV/1000 {metrics.get('ev_per_1000_hands', 0.0):.2f}"
         )
+        self._print(
+            "           "
+            f"bet rnd {metrics.get('random_action_fraction_betting', 0.0):.3f} | "
+            f"bet grd {metrics.get('greedy_action_fraction_betting', 0.0):.3f} | "
+            f"play rnd {metrics.get('random_action_fraction_playing', 0.0):.3f} | "
+            f"play grd {metrics.get('greedy_action_fraction_playing', 0.0):.3f}"
+        )
+        self._print(
+            "           "
+            f"bets {self._format_action_distribution(metrics, 'bet_action_frequencies', BET_ACTION_ORDER)} | "
+            f"play {self._format_action_distribution(metrics, 'play_action_frequencies', PLAYING_ACTION_ORDER)}"
+        )
 
     def log_epoch_summary(self, *, summary: dict[str, Any]) -> None:
         if not self.config.enable or not self.config.print_epoch_summary:
@@ -153,8 +198,27 @@ class TrainingLogger:
             f"grad {summary.get('grad_norm', 0.0):.4f} | "
             f"reward/round {summary.get('reward_per_round', 0.0):.4f} | "
             f"EV/1000 {summary.get('ev_per_1000_hands', 0.0):.2f} | "
-            f"eps {summary.get('epsilon', 0.0):.4f} | "
+            f"eps_bet {summary.get('epsilon_betting', 0.0):.4f} | "
+            f"eps_play {summary.get('epsilon_playing', 0.0):.4f} | "
             f"lr {summary.get('learning_rate', 0.0):.2e}"
+        )
+        self._print(
+            "        "
+            f"decisions bet {int(summary.get('betting_decisions', 0))} | "
+            f"play {int(summary.get('playing_decisions', 0))} | "
+            f"rnd bet {summary.get('random_action_fraction_betting', 0.0):.3f} | "
+            f"rnd play {summary.get('random_action_fraction_playing', 0.0):.3f} | "
+            f"loss_bet {summary.get('loss_betting', 0.0):.6f} | "
+            f"loss_play {summary.get('loss_playing', 0.0):.6f}"
+        )
+        self._print(
+            "        "
+            f"bets {self._format_action_distribution(summary, 'bet_action_frequencies', BET_ACTION_ORDER)} | "
+            f"bet_EV {self._format_bet_ev(summary)}"
+        )
+        self._print(
+            "        "
+            f"play {self._format_action_distribution(summary, 'play_action_frequencies', PLAYING_ACTION_ORDER)}"
         )
         if self.config.include_segment_details:
             self._print(f"[Epoch Details] situations={summary.get('situation_counts', {})}")
@@ -171,6 +235,17 @@ class TrainingLogger:
             f"push {metrics.get('push_rate', 0.0):.4f} | "
             f"loss {metrics.get('loss_rate', 0.0):.4f} | "
             f"surrender {metrics.get('surrender_rate', 0.0):.4f}"
+        )
+        self._print(
+            "        "
+            f"bet rnd {metrics.get('random_action_fraction_betting', 0.0):.3f} | "
+            f"play rnd {metrics.get('random_action_fraction_playing', 0.0):.3f} | "
+            f"bets {self._format_action_distribution(metrics, 'bet_action_frequencies', BET_ACTION_ORDER)}"
+        )
+        self._print(
+            "        "
+            f"play {self._format_action_distribution(metrics, 'play_action_frequencies', PLAYING_ACTION_ORDER)} | "
+            f"bet_EV {self._format_bet_ev(metrics)}"
         )
 
     def log_checkpoint(self, *, kind: str, path: str, metric_name: str | None = None, metric_value: float | None = None) -> None:

@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from enviroment_bj.core import ACTION_ORDER, split_value
+from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER, PLAYING_ACTION_ORDER, split_value
 
 
 @dataclass(slots=True)
@@ -29,31 +29,66 @@ class ScalarMetricAccumulator:
 @dataclass(slots=True)
 class BehaviorMetricsTracker:
     action_counts: Counter[str] = field(default_factory=Counter)
+    phase_action_counts: dict[str, Counter[str]] = field(
+        default_factory=lambda: defaultdict(Counter)
+    )
     random_action_count: int = 0
     greedy_action_count: int = 0
     total_decisions: int = 0
+    random_action_count_by_phase: Counter[str] = field(default_factory=Counter)
+    greedy_action_count_by_phase: Counter[str] = field(default_factory=Counter)
+    decisions_by_phase: Counter[str] = field(default_factory=Counter)
     total_rounds: int = 0
     total_hands: int = 0
     total_reward: float = 0.0
     total_hand_reward: float = 0.0
     total_insurance_reward: float = 0.0
+    reward_by_phase: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
     settlement_counts: Counter[str] = field(default_factory=Counter)
     situation_counts: Counter[str] = field(default_factory=Counter)
     action_by_situation: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
     table_counts: Counter[str] = field(default_factory=Counter)
+    pending_bets_by_round: dict[tuple[str, int], str] = field(default_factory=dict)
+    bet_reward_totals: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
+    bet_round_counts: Counter[str] = field(default_factory=Counter)
 
-    def record_decision(self, response: dict[str, Any], action_name: str, *, was_random: bool, table_key: str) -> None:
+    def _decision_phase(self, response: dict[str, Any]) -> str:
+        observation = response.get("observation") or {}
+        phase = observation.get("decision_phase")
+        if isinstance(phase, str) and phase:
+            return phase
+        public_state = response["info"]["public_state"]
+        phase = public_state.get("decision_phase")
+        return phase if isinstance(phase, str) and phase else "playing"
+
+    def record_decision(
+        self,
+        response: dict[str, Any],
+        action_name: str,
+        *,
+        was_random: bool,
+        table_key: str,
+        env_key: str,
+    ) -> None:
         self.action_counts[action_name] += 1
         self.total_decisions += 1
         self.table_counts[table_key] += 1
+        phase = self._decision_phase(response)
+        self.phase_action_counts[phase][action_name] += 1
+        self.decisions_by_phase[phase] += 1
         if was_random:
             self.random_action_count += 1
+            self.random_action_count_by_phase[phase] += 1
         else:
             self.greedy_action_count += 1
+            self.greedy_action_count_by_phase[phase] += 1
 
         public_state = response["info"]["public_state"]
         current_hand = public_state.get("current_hand")
         insurance_offer = public_state.get("insurance", {}).get("offer_active", False)
+
+        if phase == "betting" and action_name in BET_ACTION_ORDER:
+            self.pending_bets_by_round[(env_key, int(public_state.get("round_index", 0)))] = action_name
 
         if current_hand:
             cards = current_hand.get("cards", [])
@@ -75,7 +110,7 @@ class BehaviorMetricsTracker:
             self.situation_counts["insurance_offers"] += 1
             self.action_by_situation["insurance_offers"][action_name] += 1
 
-    def record_round_result(self, response: dict[str, Any]) -> None:
+    def record_round_result(self, response: dict[str, Any], *, env_key: str) -> None:
         if not response["done"]:
             return
         info = response["info"]
@@ -90,18 +125,36 @@ class BehaviorMetricsTracker:
         self.total_reward += float(response["reward"])
         self.total_hand_reward += float(sum(hand_rewards))
         self.total_insurance_reward += insurance_reward
+        self.reward_by_phase["betting"] += float(response["reward"])
+        self.reward_by_phase["playing"] += float(response["reward"])
         for settlement in settlements:
             if settlement is not None:
                 self.settlement_counts[settlement] += 1
+
+        round_key = (env_key, int(public_state.get("round_index", 0)))
+        bet_action = self.pending_bets_by_round.pop(round_key, None)
+        if bet_action is not None:
+            self.bet_reward_totals[bet_action] += float(response["reward"])
+            self.bet_round_counts[bet_action] += 1
 
     def summary(self) -> dict[str, Any]:
         total_hands = max(self.total_hands, 1)
         total_rounds = max(self.total_rounds, 1)
         total_decisions = max(self.total_decisions, 1)
+        total_betting_decisions = max(self.decisions_by_phase["betting"], 1)
+        total_playing_decisions = max(self.decisions_by_phase["playing"], 1)
 
         action_frequency = {
             action: self.action_counts[action] / total_decisions
             for action in ACTION_ORDER
+        }
+        bet_action_frequencies = {
+            action: self.phase_action_counts["betting"][action] / total_betting_decisions
+            for action in BET_ACTION_ORDER
+        }
+        play_action_frequencies = {
+            action: self.phase_action_counts["playing"][action] / total_playing_decisions
+            for action in PLAYING_ACTION_ORDER
         }
         win_like = self.settlement_counts["win"] + self.settlement_counts["blackjack"]
         return {
@@ -113,8 +166,26 @@ class BehaviorMetricsTracker:
             "loss_rate": self.settlement_counts["loss"] / total_hands,
             "surrender_rate": self.settlement_counts["surrender"] / total_hands,
             "action_frequencies": action_frequency,
+            "bet_action_frequencies": bet_action_frequencies,
+            "play_action_frequencies": play_action_frequencies,
             "random_action_fraction": self.random_action_count / total_decisions,
             "greedy_action_fraction": self.greedy_action_count / total_decisions,
+            "random_action_fraction_betting": self.random_action_count_by_phase["betting"] / total_betting_decisions,
+            "random_action_fraction_playing": self.random_action_count_by_phase["playing"] / total_playing_decisions,
+            "greedy_action_fraction_betting": self.greedy_action_count_by_phase["betting"] / total_betting_decisions,
+            "greedy_action_fraction_playing": self.greedy_action_count_by_phase["playing"] / total_playing_decisions,
+            "betting_decisions": float(self.decisions_by_phase["betting"]),
+            "playing_decisions": float(self.decisions_by_phase["playing"]),
+            "bet_reward_per_round": self.reward_by_phase["betting"] / total_rounds,
+            "play_reward_per_round": self.reward_by_phase["playing"] / total_rounds,
+            "bet_ev_per_1000_rounds_by_action": {
+                action: 1000.0 * self.bet_reward_totals[action] / max(self.bet_round_counts[action], 1)
+                for action in BET_ACTION_ORDER
+            },
+            "bet_round_fraction_by_action": {
+                action: self.bet_round_counts[action] / total_rounds
+                for action in BET_ACTION_ORDER
+            },
             "rounds_completed": float(self.total_rounds),
             "hands_completed": float(self.total_hands),
             "insurance_reward_total": self.total_insurance_reward,

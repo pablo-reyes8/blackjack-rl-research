@@ -11,8 +11,10 @@ from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConf
 from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN
 from training import (
     CheckpointConfig,
+    DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
+    NStepConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -23,6 +25,7 @@ from training import (
     train_model,
     train_one_epoch,
 )
+from training.epsilon import DualEpsilonScheduler
 from training.step import move_training_batch_to_device
 
 
@@ -109,6 +112,46 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
         self.assertEqual(moved["nested"]["states"][0].device.type, "cpu")
         self.assertEqual(moved["nested"]["states"][1]["mask"].device.type, "cpu")
         self.assertEqual(moved["python_only"][0]["foo"], "bar")
+
+    def test_dual_epsilon_scheduler_steps_betting_and_playing_independently(self) -> None:
+        scheduler = DualEpsilonScheduler(
+            DualEpsilonConfig(
+                betting=EpsilonScheduleConfig(start=1.0, end=0.2, decay_steps=10, evaluation_epsilon=0.05),
+                playing=EpsilonScheduleConfig(start=0.8, end=0.1, decay_steps=4, evaluation_epsilon=0.0),
+            )
+        )
+
+        scheduler.step("betting", 2)
+        scheduler.step("playing", 1)
+
+        self.assertAlmostEqual(scheduler.value("betting"), 0.84, places=6)
+        self.assertAlmostEqual(scheduler.value("playing"), 0.625, places=6)
+        self.assertAlmostEqual(scheduler.evaluation_value("betting"), 0.05, places=6)
+        self.assertAlmostEqual(scheduler.evaluation_value("playing"), 0.0, places=6)
+
+    def test_trainer_builds_discounted_n_step_transition_when_enabled(self) -> None:
+        env = self.make_env(observation_profile="minimal_basic_strategy")
+        model = FeedForwardDoubleDQN.from_profile("minimal_basic_strategy")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=False)
+            config.n_step = NStepConfig(enabled=True, n_steps=3)
+            config.trainer.loss.gamma = 0.5
+            trainer = build_trainer(env, model, pipeline_config=config)
+
+            transition = trainer._build_n_step_transition(
+                [
+                    {"state": {"id": 0}, "next_state": {"id": 1}, "action": 0, "reward": 1.0, "done": False, "action_mask": torch.ones(10, dtype=torch.bool), "next_action_mask": torch.ones(10, dtype=torch.bool)},
+                    {"state": {"id": 1}, "next_state": {"id": 2}, "action": 4, "reward": 2.0, "done": False, "action_mask": torch.ones(10, dtype=torch.bool), "next_action_mask": torch.ones(10, dtype=torch.bool)},
+                    {"state": {"id": 2}, "next_state": {"id": 3}, "action": 5, "reward": 3.0, "done": True, "action_mask": torch.ones(10, dtype=torch.bool), "next_action_mask": torch.zeros(10, dtype=torch.bool)},
+                ]
+            )
+
+            self.assertEqual(transition["state"], {"id": 0})
+            self.assertEqual(transition["next_state"], {"id": 3})
+            self.assertEqual(transition["n_steps"], 3)
+            self.assertTrue(transition["done"])
+            self.assertAlmostEqual(float(transition["reward"]), 2.75, places=6)
 
     def test_train_model_runs_feedforward_pipeline_and_saves_checkpoints(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")

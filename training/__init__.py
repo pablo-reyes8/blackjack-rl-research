@@ -1,7 +1,9 @@
 from .config import (
     CheckpointConfig,
+    DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
+    NStepConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -16,8 +18,10 @@ from .train import train_model
 __all__ = [
     "BlackjackRLTrainer",
     "CheckpointConfig",
+    "DualEpsilonConfig",
     "EpsilonScheduleConfig",
     "EvaluationConfig",
+    "NStepConfig",
     "OptimizationConfig",
     "PrintConfig",
     "ReplayBufferConfig",
