@@ -114,6 +114,25 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         self.assertEqual(tuple(output["bet_q_values"].shape), (1, model.num_bet_actions))
         self.assertEqual(tuple(output["play_q_values"].shape), (1, model.num_play_actions))
 
+    def test_module_gating_scales_each_registered_slice_without_changing_layout(self) -> None:
+        model = FeedForwardDoubleDQN.from_profile(
+            "minimal_basic_strategy",
+            use_phase_adapters=False,
+            use_module_gating=True,
+        )
+        gate_values = [0.5 + 0.25 * index for index, _ in enumerate(model._ordered_module_gate_names)]
+        for name, value in zip(model._ordered_module_gate_names, gate_values):
+            model.module_gates[name].data.fill_(value)
+
+        state_vector = torch.arange(1, model.state_dim + 1, dtype=torch.float32).unsqueeze(0)
+        gated = model._apply_module_gating(state_vector)
+        expected = state_vector.clone()
+        for value, name in zip(gate_values, model._ordered_module_gate_names):
+            start, end = model.encoder.module_slices[name]
+            expected[:, start:end] *= value
+
+        self.assertTrue(torch.allclose(gated, expected))
+
     def test_recurrent_double_dqn_gru_forward_and_backward_with_padding(self) -> None:
         sequences = self.build_realistic_sequences()
         model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")
@@ -137,6 +156,19 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         loss = (output["q_values"] * valid_steps).sum() / valid_steps.sum().clamp_min(1.0)
         loss.backward()
         self.assert_has_gradients(model)
+
+    def test_recurrent_double_dqn_accepts_preencoded_sequences_with_same_result(self) -> None:
+        sequences = self.build_realistic_sequences()
+        model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")
+        model.eval()
+
+        encoded_sequences = [[model.encoder(step) for step in sequence] for sequence in sequences]
+        raw_output = model(sequences)
+        encoded_output = model(encoded_sequences)
+
+        self.assertTrue(torch.allclose(raw_output["q_values"], encoded_output["q_values"]))
+        self.assertTrue(torch.equal(raw_output["action_mask"], encoded_output["action_mask"]))
+        self.assertTrue(torch.equal(raw_output["padding_mask"], encoded_output["padding_mask"]))
 
     def test_dueling_recurrent_double_dqn_lstm_forward_step_and_backward(self) -> None:
         sequences = self.build_unknown_progress_sequences()

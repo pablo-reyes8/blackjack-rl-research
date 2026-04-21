@@ -26,6 +26,7 @@ from training import (
     train_one_epoch,
 )
 from training.epsilon import DualEpsilonScheduler
+from training.replay_buffer import RecurrentReplayBuffer
 from training.step import move_training_batch_to_device
 
 
@@ -152,6 +153,52 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(transition["n_steps"], 3)
             self.assertTrue(transition["done"])
             self.assertAlmostEqual(float(transition["reward"]), 2.75, places=6)
+
+    def test_recurrent_replay_buffer_sample_returns_tensorized_sequence_batch(self) -> None:
+        buffer = RecurrentReplayBuffer(
+            ReplayBufferConfig(capacity=16, batch_size=2, warmup_size=0, sequence_length=4, min_sequence_length=2)
+        )
+        first_state = {"state_vector": torch.tensor([1.0, 2.0, 3.0]), "action_mask": torch.tensor([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.bool)}
+        second_state = {"state_vector": torch.tensor([4.0, 5.0, 6.0]), "action_mask": torch.tensor([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.bool)}
+        next_first_state = {"state_vector": torch.tensor([7.0, 8.0, 9.0]), "action_mask": torch.tensor([0, 0, 1, 0, 0, 0, 0, 0, 0, 0], dtype=torch.bool)}
+        next_second_state = {"state_vector": torch.tensor([10.0, 11.0, 12.0]), "action_mask": torch.tensor([0, 0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=torch.bool)}
+        buffer.add(
+            {
+                "state": [first_state, second_state],
+                "next_state": [next_first_state, next_second_state],
+                "action": [0, 4],
+                "reward": [1.0, -1.0],
+                "done": [False, True],
+                "n_steps": [1, 2],
+                "action_mask": [first_state["action_mask"], second_state["action_mask"]],
+                "next_action_mask": [next_first_state["action_mask"], next_second_state["action_mask"]],
+            }
+        )
+        buffer.add(
+            {
+                "state": [second_state, first_state, second_state],
+                "next_state": [next_second_state, next_first_state, next_second_state],
+                "action": [5, 1, 6],
+                "reward": [0.5, 0.25, -0.5],
+                "done": [False, False, True],
+                "n_steps": [1, 1, 3],
+                "action_mask": [second_state["action_mask"], first_state["action_mask"], second_state["action_mask"]],
+                "next_action_mask": [next_second_state["action_mask"], next_first_state["action_mask"], next_second_state["action_mask"]],
+            }
+        )
+
+        batch = buffer.sample()
+
+        self.assertEqual(tuple(batch["state"]["state_vector"].shape), (2, 3, 3))
+        self.assertEqual(tuple(batch["next_state"]["state_vector"].shape), (2, 3, 3))
+        self.assertEqual(tuple(batch["state"]["action_mask"].shape), (2, 3, 10))
+        self.assertEqual(tuple(batch["state"]["padding_mask"].shape), (2, 3))
+        self.assertEqual(tuple(batch["padding_mask"].shape), (2, 3))
+        self.assertTrue(torch.equal(batch["state"]["action_mask"], batch["action_mask"]))
+        self.assertTrue(torch.equal(batch["next_state"]["action_mask"], batch["next_action_mask"]))
+        self.assertEqual(batch["state"]["metadata"]["batch_size"], 2)
+        self.assertEqual(batch["next_state"]["metadata"]["batch_size"], 2)
+        self.assertTrue(all(length >= 2 for length in batch["state"]["metadata"]["sequence_lengths"]))
 
     def test_train_model_runs_feedforward_pipeline_and_saves_checkpoints(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")

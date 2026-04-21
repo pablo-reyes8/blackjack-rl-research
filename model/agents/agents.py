@@ -42,6 +42,14 @@ class BaseBlackjackQNetwork(nn.Module):
                 for name in self.encoder.module_slices
             }
         )
+        self._ordered_module_gate_names = tuple(
+            sorted(self.encoder.module_slices, key=lambda name: self.encoder.module_slices[name][0])
+        )
+        feature_gate_index = torch.full((self.state_dim,), -1, dtype=torch.long)
+        for gate_index, name in enumerate(self._ordered_module_gate_names):
+            start, end = self.encoder.module_slices[name]
+            feature_gate_index[start:end] = gate_index
+        self.register_buffer("_module_gate_feature_index", feature_gate_index, persistent=False)
 
     def _build_phase_adapter(self, hidden_dim: int) -> nn.Module:
         if not getattr(self.config, "use_phase_adapters", False):
@@ -58,24 +66,22 @@ class BaseBlackjackQNetwork(nn.Module):
         if not self.use_module_gating:
             return state_vector
 
-        gated_chunks: list[torch.Tensor] = []
-        current_offset = 0
-        ordered_slices = sorted(self.encoder.module_slices.items(), key=lambda item: item[1][0])
-
-        for name, (start, end) in ordered_slices:
-            if current_offset < start:
-                gated_chunks.append(state_vector[..., current_offset:start])
-
-            gate = self.module_gates[name]
-            gated_chunks.append(state_vector[..., start:end] * gate)
-            current_offset = end
-
-        if current_offset < state_vector.shape[-1]:
-            gated_chunks.append(state_vector[..., current_offset:])
-
-        if not gated_chunks:
+        if not self._ordered_module_gate_names:
             return state_vector
-        return torch.cat(gated_chunks, dim=-1)
+
+        gate_values = torch.stack([self.module_gates[name] for name in self._ordered_module_gate_names], dim=0).to(
+            dtype=state_vector.dtype
+        )
+        feature_index = self._module_gate_feature_index
+        valid_mask = feature_index >= 0
+
+        if bool(valid_mask.all()):
+            expanded_gates = gate_values.index_select(0, feature_index)
+            return state_vector * expanded_gates
+
+        expanded_gates = torch.ones((state_vector.shape[-1],), dtype=state_vector.dtype, device=state_vector.device)
+        expanded_gates[valid_mask] = gate_values.index_select(0, feature_index[valid_mask])
+        return state_vector * expanded_gates
 
     @classmethod
     def from_profiles(
@@ -165,6 +171,38 @@ class BaseBlackjackQNetwork(nn.Module):
                     }
                 else:
                     encoded = self.encoder.encode_sequence_batch([inputs])
+            elif (
+                isinstance(inputs[0], Sequence)
+                and inputs[0]
+                and isinstance(inputs[0][0], Mapping)
+                and isinstance(inputs[0][0].get("state_vector"), torch.Tensor)
+            ):
+                batch_size = len(inputs)
+                sequence_lengths = [len(sequence) for sequence in inputs]
+                max_len = max(sequence_lengths)
+                state_dim = inputs[0][0]["state_vector"].shape[0]
+                num_actions = self.num_actions
+                state_vector = torch.zeros((batch_size, max_len, state_dim), dtype=torch.float32)
+                action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
+                padding_mask = torch.zeros((batch_size, max_len), dtype=torch.bool)
+                for batch_index, sequence in enumerate(inputs):
+                    sequence_len = len(sequence)
+                    state_vector[batch_index, :sequence_len] = torch.stack(
+                        [step["state_vector"] for step in sequence],
+                        dim=0,
+                    ).to(torch.float32)
+                    action_mask[batch_index, :sequence_len] = torch.stack(
+                        [step["action_mask"] for step in sequence],
+                        dim=0,
+                    ).to(torch.bool)
+                    padding_mask[batch_index, :sequence_len] = True
+                encoded = {
+                    "state_vector": state_vector,
+                    "action_mask": action_mask,
+                    "padding_mask": padding_mask,
+                    "module_tensors": {},
+                    "metadata": {"batch_size": batch_size, "sequence_lengths": sequence_lengths},
+                }
             else:
                 encoded = self.encoder.encode_sequence_batch(inputs)
         else:
