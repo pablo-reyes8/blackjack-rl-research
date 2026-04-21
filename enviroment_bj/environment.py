@@ -99,8 +99,31 @@ class BlackjackEnvironment:
         self.hidden_burned_rounds = 0
         self.hidden_burned_cards = 0
         self.hidden_burned_reshuffles = 0
+        self._reset_observed_shuffle_signal()
         self._reset_observed_card_caches()
         self._start_new_shoe_tracking(reason="initial_shoe", record_action=False)
+
+    def _reset_observed_shuffle_signal(self) -> None:
+        self.observed_shuffle_reset = False
+        self.hands_since_observed_shuffle = 0
+        self._observed_shuffle_reference_active = False
+
+    def mark_observed_shuffle_reset(self) -> None:
+        if not self.config.visible_shoe_change:
+            return
+        self.observed_shuffle_reset = True
+        self.hands_since_observed_shuffle = 0
+        self._observed_shuffle_reference_active = True
+
+    def _advance_observed_shuffle_counter_for_new_round(self) -> None:
+        if not self.config.visible_shoe_change:
+            return
+        if self._observed_shuffle_reference_active and not self.observed_shuffle_reset:
+            self.hands_since_observed_shuffle += 1
+
+    def _consume_observed_shuffle_pulse(self) -> None:
+        if self.observed_shuffle_reset:
+            self.observed_shuffle_reset = False
 
     def _build_bet_action_cache(self) -> None:
         self._available_bet_multipliers = tuple(self.config.bet_multipliers)
@@ -217,10 +240,12 @@ class BlackjackEnvironment:
             self._reshuffle_pending = False
             self._reshuffled_on_last_reset = True
             self._start_new_shoe_tracking(reason="auto_reshuffle", record_action=True, public_actions_added=public_actions_added)
+            self.mark_observed_shuffle_reset()
 
         if self.shoe.remaining_cards < 4:
             raise RuntimeError("The shoe does not contain enough cards to start a round.")
 
+        self._advance_observed_shuffle_counter_for_new_round()
         self.round_index += 1
         self.total_rounds_played += 1
         self.rounds_since_shuffle += 1
@@ -360,6 +385,7 @@ class BlackjackEnvironment:
         self.observed_cards_history = []
         self.public_action_history = []
         self._reset_observed_card_caches()
+        self._reset_observed_shuffle_signal()
         self.last_round_outcome = None
         self.total_rounds_played = 0
         self.total_player_hands_seen = 0
@@ -658,6 +684,10 @@ class BlackjackEnvironment:
         if obs_cfg.obs_include_available_bet_multipliers:
             observation["available_bet_multipliers"] = list(self._available_bet_multipliers)
 
+        if self.config.visible_shoe_change:
+            observation["observed_shuffle_reset"] = self.observed_shuffle_reset
+            observation["hands_since_observed_shuffle"] = self.hands_since_observed_shuffle
+
         if self.dealer_cards:
             observation["dealer_upcard_value"] = rank_value(self.dealer_cards[0])
         else:
@@ -730,6 +760,10 @@ class BlackjackEnvironment:
                     "dealer_hands_seen_total": self.total_dealer_hands_seen,
                 }
             )
+
+        if self.config.visible_shoe_change:
+            features["observed_shuffle_reset"] = self.observed_shuffle_reset
+            features["hands_since_observed_shuffle"] = self.hands_since_observed_shuffle
 
         if obs_cfg.obs_include_estimated_shoe_progress and not self._hide_reshuffle_progress_from_observation():
             features["estimated_shoe_progress"] = self._build_estimated_shoe_progress()
@@ -817,6 +851,8 @@ class BlackjackEnvironment:
                 "last_round_outcome": deepcopy(self.last_round_outcome),
                 "recent_actions": self._get_recent_public_actions(10),
                 "observed_cards_count": len(self.observed_cards_history),
+                "observed_shuffle_reset": self.observed_shuffle_reset,
+                "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
                 "discard_summary": self.get_discard_summary(),
             },
         }
@@ -868,6 +904,8 @@ class BlackjackEnvironment:
                 "last_round_outcome": deepcopy(self.last_round_outcome),
                 "observed_cards_history": deepcopy(self.observed_cards_history),
                 "public_action_history": deepcopy(self.public_action_history),
+                "observed_shuffle_reset": self.observed_shuffle_reset,
+                "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
                 "hidden_burned_rounds": self.hidden_burned_rounds,
                 "hidden_burned_cards": self.hidden_burned_cards,
                 "hidden_burned_reshuffles": self.hidden_burned_reshuffles,
@@ -901,7 +939,7 @@ class BlackjackEnvironment:
         observation = self.get_agent_observation()
 
         if self.compact_response_mode and not self.enable_transition_recording:
-            return {
+            response = {
                 "observation": observation,
                 "table_rules": self._cached_visible_table_rules,
                 "action_mask": action_mask,
@@ -918,10 +956,13 @@ class BlackjackEnvironment:
                     "insurance_reward": self.insurance_reward,
                     "hand_rewards": [hand.reward for hand in self.player_hands],
                     "hand_settlements": [hand.settlement for hand in self.player_hands],
+                    "hand_close_reasons": [hand.close_reason for hand in self.player_hands],
                     "hand_count": len(self.player_hands),
                     "public_state": self._build_compact_public_state(),
                 },
             }
+            self._consume_observed_shuffle_pulse()
+            return response
 
         info = {
             "action": action_name,
@@ -932,9 +973,10 @@ class BlackjackEnvironment:
             "insurance_reward": self.insurance_reward,
             "hand_rewards": [hand.reward for hand in self.player_hands],
             "hand_settlements": [hand.settlement for hand in self.player_hands],
+            "hand_close_reasons": [hand.close_reason for hand in self.player_hands],
             "public_state": self.get_public_state(),
         }
-        return {
+        response = {
             "observation": observation,
             "table_rules": self.get_visible_table_rules(),
             "action_mask": action_mask,
@@ -946,6 +988,8 @@ class BlackjackEnvironment:
             "truncated": False,
             "info": info,
         }
+        self._consume_observed_shuffle_pulse()
+        return response
 
     def _record_transition(
         self,

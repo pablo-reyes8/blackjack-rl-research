@@ -200,6 +200,52 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
         self.assertEqual(batch["next_state"]["metadata"]["batch_size"], 2)
         self.assertTrue(all(length >= 2 for length in batch["state"]["metadata"]["sequence_lengths"]))
 
+    def test_recurrent_done_transition_forces_sequence_boundary_when_hidden_resets(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=True)
+            config.trainer.reset_hidden_on_round_end = True
+            config.trainer.sequence_end_on_done = False
+            trainer = build_trainer(env, model, pipeline_config=config)
+            env_state = trainer.env_states[0]
+
+            transition = {
+                "state": {"state_vector": torch.ones(3), "action_mask": torch.ones(10, dtype=torch.bool)},
+                "next_state": {"state_vector": torch.ones(3), "action_mask": torch.ones(10, dtype=torch.bool)},
+                "action": 0,
+                "reward": 1.0,
+                "done": True,
+                "action_mask": torch.ones(10, dtype=torch.bool),
+                "next_action_mask": torch.ones(10, dtype=torch.bool),
+                "n_steps": 1,
+            }
+
+            trainer._store_processed_transition(env_state, transition)
+
+            self.assertEqual(len(env_state.pending_sequence), 0)
+            self.assertEqual(len(trainer.replay_buffer), 1)
+
+    def test_recurrent_collect_inference_matches_forward_step_for_single_env(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        model = RecurrentDoubleDQN.from_profile("table_realistic_default", recurrent_type="gru")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=True)
+            trainer = build_trainer(env, model, pipeline_config=config)
+            env_state = trainer.env_states[0]
+            trainer._ensure_active_response(env_state, tracker=type("T", (), {})())
+            env_state.hidden_state = trainer.online_network.init_hidden(batch_size=1, device=trainer.device)
+
+            batched_q, batched_mask, next_hidden = trainer._batched_policy_inference([env_state])
+            step_output = trainer.online_network.forward_step(env_state.response, hidden_state=env_state.hidden_state)
+
+            self.assertTrue(torch.allclose(batched_q[0], step_output["masked_q_values"][0]))
+            self.assertTrue(torch.equal(batched_mask[0], step_output["action_mask"][0]))
+            self.assertIsInstance(next_hidden, list)
+            self.assertEqual(len(next_hidden), 1)
+
     def test_train_model_runs_feedforward_pipeline_and_saves_checkpoints(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")
         model = FeedForwardDoubleDQN.from_profile("minimal_basic_strategy")

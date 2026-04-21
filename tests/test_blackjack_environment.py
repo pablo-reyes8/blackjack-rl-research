@@ -122,6 +122,50 @@ class BlackjackEnvironmentTests(unittest.TestCase):
         self.assertIn("table:settle_round", tokens)
         self.assertEqual(tokens[-1], "table:reset_to_betting")
 
+    def test_manual_observed_shuffle_signal_pulses_once_and_then_counts_hands(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default", visible_shoe_change=True)
+        env.load_shoe(["10", "6", "7", "10", "10", "9", "5", "2", "9", "7", "8", "6"], total_cards=12)
+
+        betting = self.reset_to_betting(env)
+        self.assertFalse(betting["observation"]["observed_shuffle_reset"])
+        self.assertEqual(betting["observation"]["hands_since_observed_shuffle"], 0)
+
+        env.mark_observed_shuffle_reset()
+        playing = env.step("bet_1x")
+        self.assertTrue(playing["observation"]["observed_shuffle_reset"])
+        self.assertEqual(playing["observation"]["hands_since_observed_shuffle"], 0)
+
+        done = env.step("stand")
+        next_round = self.reset_to_betting(env)
+        self.assertFalse(done["observation"]["observed_shuffle_reset"])
+        self.assertFalse(next_round["observation"]["observed_shuffle_reset"])
+        self.assertEqual(next_round["observation"]["hands_since_observed_shuffle"], 1)
+
+    def test_auto_reshuffle_sets_observed_shuffle_signal_when_visible(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default", visible_shoe_change=True, shoe_penetration=0.5)
+        env.load_shoe(["10", "6", "7", "10", "10"], total_cards=8)
+
+        self.start_round(env)
+        env.step("stand")
+        next_round = self.reset_to_betting(env)
+
+        self.assertTrue(next_round["info"]["public_state"]["shoe"]["reshuffled_on_reset"])
+        self.assertTrue(next_round["observation"]["observed_shuffle_reset"])
+        self.assertEqual(next_round["observation"]["hands_since_observed_shuffle"], 0)
+
+    def test_observed_shuffle_signal_can_be_disabled_per_table(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default", visible_shoe_change=False, shoe_penetration=0.5)
+        env.load_shoe(["10", "6", "7", "10", "10"], total_cards=8)
+
+        self.start_round(env)
+        env.step("stand")
+        next_round = self.reset_to_betting(env)
+        temporal = next_round["observation"]["temporal_context"]
+
+        self.assertTrue(next_round["info"]["public_state"]["shoe"]["reshuffled_on_reset"])
+        self.assertNotIn("observed_shuffle_reset", temporal)
+        self.assertNotIn("hands_since_observed_shuffle", temporal)
+
     def test_observed_cards_history_resets_after_shuffle_when_enabled(self) -> None:
         env = self.make_env(
             observation_profile="table_realistic_default",

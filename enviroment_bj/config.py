@@ -161,6 +161,7 @@ class BlackjackConfig:
     n_decks: int = 6
     shoe_penetration: float = 0.8
     use_cut_card: bool = False
+    visible_shoe_change: bool = True
     dealer_hits_soft_17: bool = False
     blackjack_payout: float = 1.5
     dealer_peeks_for_blackjack: bool = True

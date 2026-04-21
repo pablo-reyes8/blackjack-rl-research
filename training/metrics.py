@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from math import sqrt
 from typing import Any
 
 from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER, PLAYING_ACTION_ORDER, split_value
@@ -51,6 +52,8 @@ class BehaviorMetricsTracker:
     pending_bets_by_round: dict[tuple[str, int], str] = field(default_factory=dict)
     bet_reward_totals: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
     bet_round_counts: Counter[str] = field(default_factory=Counter)
+    hand_close_reason_counts: Counter[str] = field(default_factory=Counter)
+    round_reward_samples: list[float] = field(default_factory=list)
 
     def _decision_phase(self, response: dict[str, Any]) -> str:
         observation = response.get("observation") or {}
@@ -118,12 +121,14 @@ class BehaviorMetricsTracker:
         public_state = info.get("public_state") or {}
         settlements = info.get("hand_settlements", [])
         hand_rewards = info.get("hand_rewards", [])
+        hand_close_reasons = info.get("hand_close_reasons", [])
         insurance_reward = float(info.get("insurance_reward", 0.0))
         hand_count = int(info.get("hand_count", public_state.get("hand_count", len(public_state.get("player_hands", [])))))
 
         self.total_rounds += 1
         self.total_hands += hand_count
         self.total_reward += float(response["reward"])
+        self.round_reward_samples.append(float(response["reward"]))
         self.total_hand_reward += float(sum(hand_rewards))
         self.total_insurance_reward += insurance_reward
         self.reward_by_phase["betting"] += float(response["reward"])
@@ -131,6 +136,9 @@ class BehaviorMetricsTracker:
         for settlement in settlements:
             if settlement is not None:
                 self.settlement_counts[settlement] += 1
+        for close_reason in hand_close_reasons:
+            if close_reason is not None:
+                self.hand_close_reason_counts[close_reason] += 1
 
         round_key = (env_key, int(info.get("round_index", public_state.get("round_index", 0))))
         bet_action = self.pending_bets_by_round.pop(round_key, None)
@@ -158,14 +166,23 @@ class BehaviorMetricsTracker:
             for action in PLAYING_ACTION_ORDER
         }
         win_like = self.settlement_counts["win"] + self.settlement_counts["blackjack"]
+        round_reward_mean = self.total_reward / total_rounds
+        round_reward_variance = 0.0
+        if self.round_reward_samples:
+            round_reward_variance = sum(
+                (reward - round_reward_mean) ** 2 for reward in self.round_reward_samples
+            ) / len(self.round_reward_samples)
         return {
             "reward_per_round": self.total_reward / total_rounds,
             "reward_per_hand": self.total_reward / total_hands,
             "ev_per_1000_hands": 1000.0 * self.total_reward / total_hands,
+            "round_reward_std": sqrt(round_reward_variance),
             "win_rate": win_like / total_hands,
             "push_rate": self.settlement_counts["push"] / total_hands,
             "loss_rate": self.settlement_counts["loss"] / total_hands,
             "surrender_rate": self.settlement_counts["surrender"] / total_hands,
+            "blackjack_rate": self.settlement_counts["blackjack"] / total_hands,
+            "bust_rate": self.hand_close_reason_counts["bust"] / total_hands,
             "action_frequencies": action_frequency,
             "bet_action_frequencies": bet_action_frequencies,
             "play_action_frequencies": play_action_frequencies,
@@ -187,6 +204,8 @@ class BehaviorMetricsTracker:
                 action: self.bet_round_counts[action] / total_rounds
                 for action in BET_ACTION_ORDER
             },
+            "conservative_bet_fraction": self.bet_round_counts["bet_1x"] / total_rounds,
+            "aggressive_bet_fraction": (self.bet_round_counts["bet_3x"] + self.bet_round_counts["bet_4x"]) / total_rounds,
             "rounds_completed": float(self.total_rounds),
             "hands_completed": float(self.total_hands),
             "insurance_reward_total": self.total_insurance_reward,

@@ -55,7 +55,7 @@ class RecurrentReplayBuffer:
         return len(self.storage)
 
     def add(self, sequence: dict[str, Any]) -> None:
-        if len(sequence["action"]) < self.config.min_sequence_length:
+        if len(sequence["action"]) < self.config.min_sequence_length and not any(sequence.get("done", [])):
             return
         self.storage.append(sequence)
 

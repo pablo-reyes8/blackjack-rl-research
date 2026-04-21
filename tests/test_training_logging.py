@@ -121,6 +121,12 @@ class TrainingLoggingTests(unittest.TestCase):
                     "grad_norm": 1.2,
                     "reward_per_round": 0.03,
                     "ev_per_1000_hands": 12.0,
+                    "round_reward_std": 1.25,
+                    "win_rate": 0.40,
+                    "push_rate": 0.08,
+                    "loss_rate": 0.52,
+                    "blackjack_rate": 0.05,
+                    "bust_rate": 0.18,
                     "epsilon_betting": 0.8,
                     "epsilon_playing": 0.6,
                     "betting_decisions": 10,
@@ -129,6 +135,8 @@ class TrainingLoggingTests(unittest.TestCase):
                     "random_action_fraction_playing": 0.2,
                     "loss_betting": 0.22,
                     "loss_playing": 0.11,
+                    "conservative_bet_fraction": 0.50,
+                    "aggressive_bet_fraction": 0.20,
                     "bet_action_frequencies": {"bet_1x": 0.5, "bet_2x": 0.3, "bet_3x": 0.1, "bet_4x": 0.1},
                     "play_action_frequencies": {"stand": 0.4, "hit": 0.3, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
                     "bet_ev_per_1000_rounds_by_action": {"bet_1x": 10.0, "bet_2x": 20.0, "bet_3x": -5.0, "bet_4x": -15.0},
@@ -139,16 +147,40 @@ class TrainingLoggingTests(unittest.TestCase):
                 metrics={
                     "reward_per_round": 0.05,
                     "ev_per_1000_hands": 20.0,
+                    "round_reward_std": 1.75,
                     "win_rate": 0.42,
                     "push_rate": 0.08,
                     "loss_rate": 0.50,
                     "surrender_rate": 0.01,
+                    "blackjack_rate": 0.04,
+                    "bust_rate": 0.15,
                     "random_action_fraction_betting": 0.1,
                     "random_action_fraction_playing": 0.05,
+                    "conservative_bet_fraction": 0.60,
+                    "aggressive_bet_fraction": 0.20,
+                    "insurance_reward_total": 1.5,
                     "bet_action_frequencies": {"bet_1x": 0.6, "bet_2x": 0.2, "bet_3x": 0.1, "bet_4x": 0.1},
                     "play_action_frequencies": {"stand": 0.45, "hit": 0.25, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
                     "bet_ev_per_1000_rounds_by_action": {"bet_1x": 15.0, "bet_2x": 30.0, "bet_3x": 5.0, "bet_4x": -10.0},
                 }
+            )
+            logger.log_train_val_comparison(
+                train_metrics={
+                    "ev_per_1000_hands": 12.0,
+                    "reward_per_round": 0.03,
+                    "round_reward_std": 1.25,
+                    "conservative_bet_fraction": 0.50,
+                    "aggressive_bet_fraction": 0.20,
+                    "play_action_frequencies": {"double": 0.10, "insurance": 0.05},
+                },
+                eval_metrics={
+                    "ev_per_1000_hands": 20.0,
+                    "reward_per_round": 0.05,
+                    "round_reward_std": 1.75,
+                    "conservative_bet_fraction": 0.60,
+                    "aggressive_bet_fraction": 0.20,
+                    "play_action_frequencies": {"double": 0.12, "insurance": 0.02},
+                },
             )
             logger.log_checkpoint(
                 kind="best_eval",
@@ -159,17 +191,21 @@ class TrainingLoggingTests(unittest.TestCase):
             logger.log_epoch_time(epoch_time_sec=90.0)
 
         output = buffer.getvalue()
-        self.assertIn("Blackjack RL run | arch: recurrent | recurrent: lstm", output)
-        self.assertIn("Device: cpu | epochs: 5 | envs: 1 | steps/epoch: 2000 | updates/epoch~: 500", output)
-        self.assertIn("eps_bet 1.000->0.100", output)
-        self.assertIn("eps_play 1.000->0.030", output)
+        self.assertIn("BLACKJACK RL RUN", output)
+        self.assertIn("arch=recurrent | recurrent=lstm", output)
+        self.assertIn("device=cpu | epochs=5 | envs=1 | steps/epoch=2000", output)
+        self.assertIn("eps_bet=1.000->0.100", output)
+        self.assertIn("eps_play=1.000->0.030", output)
         self.assertIn("=== Epoch 1/5 ===", output)
-        self.assertIn("[train step 2/8]", output)
-        self.assertIn("phase loss bet 0.200000 | play 0.100000", output)
-        self.assertIn("[Train] loss 0.120000", output)
-        self.assertIn("bets bet_1x:0.50 bet_2x:0.30 bet_3x:0.10 bet_4x:0.10", output)
-        self.assertIn("[Val]   reward/round 0.0500", output)
-        self.assertIn("play stand:0.45 hit:0.25 double:0.10 split:0.10 surrender:0.05 insurance:0.05", output)
+        self.assertIn("TRAIN STEP 2/8", output)
+        self.assertIn("loss_bet=0.200000 | loss_play=0.100000", output)
+        self.assertIn("TRAIN EPOCH SUMMARY", output)
+        self.assertIn("bet_1x:0.50 bet_2x:0.30 bet_3x:0.10 bet_4x:0.10", output)
+        self.assertIn("VAL", output)
+        self.assertIn("blackjack=0.0400 | bust=0.1500", output)
+        self.assertIn("stand:0.45 hit:0.25 double:0.10 split:0.10 surrender:0.05 insurance:0.05", output)
+        self.assertIn("TRAIN vs VAL", output)
+        self.assertIn("EV_gap=+8.00", output)
         self.assertIn("Best saved to checkpoints/best_eval.pt (ev_per_1000_hands 20.0000)", output)
         self.assertIn("Epoch time: 1.50 min", output)
 

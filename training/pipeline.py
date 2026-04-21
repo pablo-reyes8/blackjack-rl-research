@@ -137,7 +137,10 @@ class BlackjackRLTrainer:
         if self.is_recurrent:
             env_state.pending_sequence.append(transition)
             should_finalize = len(env_state.pending_sequence) >= self.pipeline_config.replay_buffer.sequence_length
-            if self.pipeline_config.trainer.sequence_end_on_done and transition["done"]:
+            if transition["done"] and (
+                self.pipeline_config.trainer.sequence_end_on_done
+                or self.pipeline_config.trainer.reset_hidden_on_round_end
+            ):
                 should_finalize = True
             if should_finalize:
                 self._commit_pending_sequence(env_state)
@@ -533,6 +536,7 @@ class BlackjackRLTrainer:
         if self.pipeline_config.evaluation.enabled and self.epoch_index % self.pipeline_config.evaluation.every_n_epochs == 0:
             eval_metrics = self.evaluate()
             self.logger.log_evaluation(metrics=eval_metrics)
+            self.logger.log_train_val_comparison(train_metrics=epoch_summary, eval_metrics=eval_metrics)
             best_path = self.checkpoints.save_best(self, metrics=eval_metrics)
             if best_path is not None:
                 self.best_eval_metrics = dict(eval_metrics)

@@ -136,6 +136,25 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertTrue(torch.count_nonzero(encoded["module_tensors"]["temporal"]).item() > 0)
         self.assertNotIn("estimated_shoe_progress", response["observation"]["temporal_context"])
 
+    def test_temporal_encoder_includes_observed_shuffle_signal(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default", visible_shoe_change=True)
+        env.load_shoe(["10", "6", "7", "10", "10", "9", "5", "2"], total_cards=8)
+        encoder = BlackjackObservationEncoder.from_profile("table_realistic_default")
+
+        before = env.reset()
+        env.mark_observed_shuffle_reset()
+        after = env.step("bet_1x")
+
+        before_encoded = encoder(before)
+        after_encoded = encoder(after)
+        before_temporal = before_encoded["module_tensors"]["temporal"]
+        after_temporal = after_encoded["module_tensors"]["temporal"]
+
+        self.assertEqual(float(before_temporal[-2].item()), 0.0)
+        self.assertEqual(float(before_temporal[-1].item()), 0.0)
+        self.assertEqual(float(after_temporal[-2].item()), 1.0)
+        self.assertEqual(float(after_temporal[-1].item()), 0.0)
+
     def test_encode_batch_stacks_responses_into_bxd(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")
         env.load_shoe(["10", "6", "7", "10", "9", "5", "2", "10"], total_cards=8)
