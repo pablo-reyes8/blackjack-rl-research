@@ -582,6 +582,99 @@ class BlackjackEnvironmentTests(unittest.TestCase):
         self.assertFalse(next_shoe["cut_card_reached"])
         self.assertTrue(next_shoe["reshuffled_on_reset"])
 
+    def test_training_exogenous_visible_cards_are_applied_after_round_end(self) -> None:
+        hit_probabilities = [0.0] * 22
+        hit_probabilities[17] = 1.0
+        env = self.make_env(
+            observation_profile="table_realistic_default",
+            exogenous_cards=True,
+            exogenous_hit_after_stand_probabilities=tuple(hit_probabilities),
+            exogenous_double_after_non_double_probabilities=(0.0,) * 22,
+            exogenous_split_after_non_split_probabilities=(0.0,) * 12,
+        )
+        env.load_shoe(["10", "6", "7", "10", "10", "9", "5"], total_cards=7)
+
+        self.start_round(env)
+        response = env.step("stand")
+        public_state = response["info"]["public_state"]
+
+        self.assertTrue(response["done"])
+        self.assertEqual(response["reward"], 1.0)
+        self.assertEqual(public_state["player_hands"][0]["cards"], ["10", "7"])
+        self.assertEqual(public_state["dealer"]["cards"], ["6", "10", "10"])
+        self.assertEqual(response["info"]["exogenous_visible_cards"], ["9"])
+        self.assertEqual(public_state["history"]["last_exogenous_visible_cards"], ["9"])
+        self.assertEqual(response["observation"]["discard_summary"]["observed_cards_count"], 6)
+        self.assertEqual(env.observed_cards_history[-1]["card"], "9")
+        self.assertEqual(env.observed_cards_history[-1]["source"], "exogenous_table")
+        self.assertEqual(env.shoe.remaining_cards, 1)
+
+    def test_training_exogenous_double_card_uses_non_double_probability_bucket(self) -> None:
+        double_probabilities = [0.0] * 22
+        double_probabilities[11] = 1.0
+        env = self.make_env(
+            observation_profile="table_realistic_default",
+            simulate_exogenous_visible_cards=True,
+            exogenous_visible_cards_mode="training_heuristic",
+            exogenous_hit_after_stand_probabilities=(0.0,) * 22,
+            exogenous_double_after_non_double_probabilities=tuple(double_probabilities),
+            exogenous_split_after_non_split_probabilities=(0.0,) * 12,
+        )
+        env.load_shoe(["9", "6", "2", "10", "10", "5", "8"], total_cards=7)
+
+        start = self.start_round(env)
+        self.assertEqual(start["info"]["public_state"]["current_hand"]["total"], 11)
+        response = env.step("stand")
+
+        self.assertEqual(response["info"]["exogenous_visible_cards"], ["5"])
+        self.assertEqual(response["info"]["public_state"]["history"]["last_exogenous_visible_cards"], ["5"])
+
+    def test_training_exogenous_split_cards_use_pair_bucket(self) -> None:
+        split_probabilities = [0.0] * 12
+        split_probabilities[8] = 1.0
+        env = self.make_env(
+            observation_profile="table_realistic_default",
+            simulate_exogenous_visible_cards=True,
+            exogenous_visible_cards_mode="training_heuristic",
+            exogenous_hit_after_stand_probabilities=(0.0,) * 22,
+            exogenous_double_after_non_double_probabilities=(0.0,) * 22,
+            exogenous_split_after_non_split_probabilities=tuple(split_probabilities),
+        )
+        env.load_shoe(["8", "6", "8", "10", "10", "5", "2", "3"], total_cards=8)
+
+        start = self.start_round(env)
+        self.assertTrue(start["action_mask_by_name"]["split"])
+        response = env.step("stand")
+
+        self.assertEqual(response["info"]["exogenous_visible_cards"], ["5", "2"])
+        self.assertEqual(response["info"]["public_state"]["history"]["last_exogenous_visible_cards"], ["5", "2"])
+
+    def test_manual_exogenous_visible_cards_are_consumed_on_next_reset(self) -> None:
+        env = self.make_env(
+            observation_profile="table_realistic_default",
+            exogenous_visible_cards_mode="manual_only",
+        )
+        env.load_shoe(["10", "6", "7", "10", "10", "9", "5", "2", "3", "4", "8", "9"], total_cards=12)
+
+        self.start_round(env)
+        finished = env.step("stand")
+        env.inject_exogenous_visible_cards(["5", "2"])
+        next_round = self.reset_to_betting(env)
+        public_state = next_round["info"]["public_state"]
+
+        self.assertTrue(finished["done"])
+        self.assertEqual(next_round["info"]["exogenous_visible_cards"], ["5", "2"])
+        self.assertEqual(public_state["history"]["last_exogenous_visible_cards"], ["5", "2"])
+        self.assertEqual(next_round["observation"]["discard_summary"]["observed_cards_count"], 7)
+        self.assertEqual(env.shoe.remaining_cards, 5)
+        self.assertEqual([event["card"] for event in env.observed_cards_history[-2:]], ["5", "2"])
+
+    def test_manual_exogenous_visible_cards_raise_when_disabled(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default", exogenous_visible_cards_mode="disabled")
+
+        with self.assertRaises(RuntimeError):
+            env.inject_exogenous_visible_cards(["A"])
+
     def test_transition_log_records_public_actions_and_drawn_cards(self) -> None:
         env = self.make_env(
             observation_profile="table_realistic_default",

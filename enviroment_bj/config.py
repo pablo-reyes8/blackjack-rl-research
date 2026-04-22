@@ -5,6 +5,49 @@ from dataclasses import dataclass, field
 from .core import SUPPORTED_BET_MULTIPLIERS
 
 
+EXOGENOUS_EVENT_PROFILE_DEFAULTS = {
+    "normal": {
+        "hit": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.030, 0.120, 0.350, 0.250, 0.120, 0.050, 0.010, 0.0,
+        ),
+        "double": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.120, 0.250,
+            0.400, 0.080, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ),
+        "split": (
+            0.0, 0.0, 0.040, 0.040, 0.006, 0.0, 0.080, 0.090, 0.200, 0.100, 0.012, 0.200,
+        ),
+    },
+    "aggressive": {
+        "hit": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.080, 0.220, 0.550, 0.400, 0.220, 0.100, 0.030, 0.0,
+        ),
+        "double": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.030, 0.200, 0.380,
+            0.550, 0.120, 0.020, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ),
+        "split": (
+            0.0, 0.0, 0.050, 0.050, 0.010, 0.0, 0.100, 0.120, 0.250, 0.150, 0.020, 0.250,
+        ),
+    },
+    "passive": {
+        "hit": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.030, 0.090, 0.050, 0.015, 0.0, 0.0, 0.0,
+        ),
+        "double": (
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.050, 0.120,
+            0.200, 0.030, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ),
+        "split": (
+            0.0, 0.0, 0.020, 0.020, 0.002, 0.0, 0.040, 0.050, 0.100, 0.050, 0.003, 0.100,
+        ),
+    },
+}
+
+
 @dataclass(slots=True)
 class StartStateConfig:
     mode: str = "fresh_shoe"
@@ -162,6 +205,13 @@ class BlackjackConfig:
     shoe_penetration: float = 0.8
     use_cut_card: bool = False
     visible_shoe_change: bool = True
+    exogenous_cards: bool = False
+    simulate_exogenous_visible_cards: bool = False
+    exogenous_visible_cards_mode: str = "disabled"
+    exogenous_cards_profile: str = "normal"
+    exogenous_hit_after_stand_probabilities: tuple[float, ...] | None = None
+    exogenous_double_after_non_double_probabilities: tuple[float, ...] | None = None
+    exogenous_split_after_non_split_probabilities: tuple[float, ...] | None = None
     dealer_hits_soft_17: bool = False
     blackjack_payout: float = 1.5
     dealer_peeks_for_blackjack: bool = True
@@ -184,6 +234,14 @@ class BlackjackConfig:
     expose_shoe_composition: bool = False
 
     def __post_init__(self) -> None:
+        def _validate_probability_list(name: str, values: tuple[float, ...]) -> None:
+            if not values:
+                raise ValueError(f"{name} must not be empty")
+            if any(value < 0 for value in values):
+                raise ValueError(f"{name} must contain non-negative probabilities")
+            if any(value > 1.0 for value in values):
+                raise ValueError(f"{name} must contain probabilities in [0, 1]")
+
         if self.n_decks <= 0:
             raise ValueError("n_decks must be positive")
         if not 0 < self.shoe_penetration <= 1:
@@ -224,6 +282,31 @@ class BlackjackConfig:
             )
         if not isinstance(self.observation, ObservationConfig):
             raise TypeError("observation must be an ObservationConfig instance")
+        if self.exogenous_cards_profile not in EXOGENOUS_EVENT_PROFILE_DEFAULTS:
+            raise ValueError("exogenous_cards_profile must be 'normal', 'aggressive', or 'passive'")
+        if self.exogenous_visible_cards_mode not in {"disabled", "training_heuristic", "manual_only"}:
+            raise ValueError("exogenous_visible_cards_mode must be 'disabled', 'training_heuristic', or 'manual_only'")
+
+        defaults = EXOGENOUS_EVENT_PROFILE_DEFAULTS[self.exogenous_cards_profile]
+        if self.exogenous_hit_after_stand_probabilities is None:
+            self.exogenous_hit_after_stand_probabilities = defaults["hit"]
+        if self.exogenous_double_after_non_double_probabilities is None:
+            self.exogenous_double_after_non_double_probabilities = defaults["double"]
+        if self.exogenous_split_after_non_split_probabilities is None:
+            self.exogenous_split_after_non_split_probabilities = defaults["split"]
+
+        _validate_probability_list(
+            "exogenous_hit_after_stand_probabilities",
+            self.exogenous_hit_after_stand_probabilities,
+        )
+        _validate_probability_list(
+            "exogenous_double_after_non_double_probabilities",
+            self.exogenous_double_after_non_double_probabilities,
+        )
+        _validate_probability_list(
+            "exogenous_split_after_non_split_probabilities",
+            self.exogenous_split_after_non_split_probabilities,
+        )
 
         if self.observation_mode is not None:
             self.observation.obs_current_hand_mode = self.observation_mode

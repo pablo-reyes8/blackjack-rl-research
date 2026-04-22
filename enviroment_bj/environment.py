@@ -99,6 +99,8 @@ class BlackjackEnvironment:
         self.hidden_burned_rounds = 0
         self.hidden_burned_cards = 0
         self.hidden_burned_reshuffles = 0
+        self.pending_manual_exogenous_cards: list[str] = []
+        self.last_exogenous_visible_cards: list[str] = []
         self._reset_observed_shuffle_signal()
         self._reset_observed_card_caches()
         self._start_new_shoe_tracking(reason="initial_shoe", record_action=False)
@@ -204,6 +206,146 @@ class BlackjackEnvironment:
         self.transition_log: list[dict[str, Any]] = []
         self.last_transition: dict[str, Any] | None = None
         self._dealer_hole_observed_this_round = False
+        self.last_exogenous_visible_cards = []
+        self.last_exogenous_visible_event_types = []
+
+    def inject_exogenous_visible_cards(self, cards: list[str]) -> None:
+        if self.config.exogenous_visible_cards_mode == "disabled" and not self.config.exogenous_cards:
+            raise RuntimeError("Exogenous visible cards are disabled for this table")
+        for card in cards:
+            if card not in CARD_RANKS:
+                raise ValueError(f"Unsupported exogenous card '{card}'")
+        self.pending_manual_exogenous_cards.extend(cards)
+
+    def _training_exogenous_enabled(self) -> bool:
+        if self.config.exogenous_visible_cards_mode == "manual_only":
+            return False
+        if self.config.exogenous_visible_cards_mode == "training_heuristic":
+            return True
+        return self.config.exogenous_cards or self.config.simulate_exogenous_visible_cards
+
+    def _lookup_exogenous_probability(self, probabilities: tuple[float, ...], index: int) -> float:
+        if not probabilities:
+            return 0.0
+        clamped_index = max(0, min(index, len(probabilities) - 1))
+        return float(probabilities[clamped_index])
+
+    def _build_exogenous_training_context(self, hand: HandState | None) -> dict[str, Any] | None:
+        if hand is None:
+            return None
+        pair_value = None
+        if len(hand.cards) == 2 and split_value(hand.cards[0]) == split_value(hand.cards[1]):
+            pair_value = split_value(hand.cards[0])
+        return {
+            "total": hand.total(),
+            "can_double": self._can_double(hand),
+            "can_split": self._can_split(hand),
+            "pair_value": pair_value,
+        }
+
+    def _sample_training_exogenous_visible_cards(
+        self,
+        *,
+        action_name: str,
+        context: dict[str, Any] | None,
+    ) -> tuple[list[str], list[str]]:
+        if not self._training_exogenous_enabled():
+            return [], []
+
+        if context is None:
+            return [], []
+
+        sampled_cards: list[str] = []
+        event_types: list[str] = []
+        total = int(context["total"])
+
+        if action_name == "stand":
+            hit_probability = self._lookup_exogenous_probability(
+                self.config.exogenous_hit_after_stand_probabilities,
+                total,
+            )
+            if self._rng.random() < hit_probability and self.shoe.remaining_cards > 0:
+                sampled_cards.append(self.shoe.draw())
+                event_types.append("hit")
+
+        if context["can_double"] and action_name != "double":
+            double_probability = self._lookup_exogenous_probability(
+                self.config.exogenous_double_after_non_double_probabilities,
+                total,
+            )
+            if self._rng.random() < double_probability and self.shoe.remaining_cards > 0:
+                sampled_cards.append(self.shoe.draw())
+                event_types.append("double")
+
+        if context["can_split"] and action_name != "split" and context["pair_value"] is not None:
+            split_probability = self._lookup_exogenous_probability(
+                self.config.exogenous_split_after_non_split_probabilities,
+                int(context["pair_value"]),
+            )
+            if self._rng.random() < split_probability:
+                cards_to_draw = min(2, self.shoe.remaining_cards)
+                sampled_cards.extend(self.shoe.draw() for _ in range(cards_to_draw))
+                if cards_to_draw > 0:
+                    event_types.append("split")
+
+        return sampled_cards, event_types
+
+    def _remove_card_from_shoe(self, card: str) -> None:
+        try:
+            self.shoe.cards.remove(card)
+        except ValueError as exc:
+            raise ValueError(f"Exogenous card '{card}' is not available in the remaining shoe") from exc
+
+        if self.config.use_cut_card and not self.shoe.cut_card_reached:
+            minimum_remaining = int(self.shoe.total_cards * (1 - self.config.shoe_penetration))
+            if self.shoe.remaining_cards <= minimum_remaining:
+                self.shoe.cut_card_reached = True
+
+    def _apply_exogenous_visible_cards(
+        self,
+        cards: list[str],
+        *,
+        source: str,
+        event_types: list[str] | None,
+        public_actions_added: list[dict[str, Any]] | None,
+    ) -> list[str]:
+        if not cards:
+            return []
+
+        applied_cards: list[str] = []
+        if source == "manual":
+            for card in cards:
+                self._remove_card_from_shoe(card)
+                applied_cards.append(card)
+        else:
+            applied_cards = list(cards)
+
+        for card in applied_cards:
+            self._observe_public_card(card, source="exogenous_table")
+
+        self.last_exogenous_visible_cards.extend(applied_cards)
+        self.last_exogenous_visible_event_types.extend(event_types or [])
+        self._record_public_action(
+            public_actions_added,
+            actor="table",
+            action="exogenous_visible_cards",
+            source=source,
+            event_types=list(event_types or []),
+            cards=list(applied_cards),
+            count=len(applied_cards),
+        )
+        self._reshuffle_pending = self._reshuffle_pending or self.shoe.should_reshuffle() or self.shoe.remaining_cards < 4
+        return applied_cards
+
+    def _apply_pending_manual_exogenous_cards(
+        self,
+        public_actions_added: list[dict[str, Any]] | None,
+    ) -> list[str]:
+        if not self.pending_manual_exogenous_cards:
+            return []
+        cards = list(self.pending_manual_exogenous_cards)
+        self.pending_manual_exogenous_cards = []
+        return self._apply_exogenous_visible_cards(cards, source="manual", event_types=["manual"], public_actions_added=public_actions_added)
 
     def load_shoe(
         self,
@@ -234,6 +376,7 @@ class BlackjackEnvironment:
         public_actions_added: list[dict[str, Any]] = []
 
         self._prepare_episode_start()
+        self._apply_pending_manual_exogenous_cards(public_actions_added)
 
         if self._reshuffle_pending or self.shoe.should_reshuffle() or self.shoe.remaining_cards < 4:
             self.shoe.shuffle()
@@ -454,6 +597,7 @@ class BlackjackEnvironment:
             raise RuntimeError(f"Unsupported decision phase '{self.decision_phase}'")
 
         current_hand = self._current_hand()
+        exogenous_context = self._build_exogenous_training_context(current_hand)
 
         if self.insurance_offer_active and action_name != "insurance":
             self.insurance_offer_active = False
@@ -615,6 +759,20 @@ class BlackjackEnvironment:
             self._advance_round_flow(drawn_cards, public_actions_added)
         else:
             raise ValueError(f"Unsupported action '{action_name}'")
+
+        if self.round_over:
+            training_cards, training_event_types = self._sample_training_exogenous_visible_cards(
+                action_name=action_name,
+                context=exogenous_context,
+            )
+            if training_cards:
+                self._apply_exogenous_visible_cards(
+                    training_cards,
+                    source="training_heuristic",
+                    event_types=training_event_types,
+                    public_actions_added=public_actions_added,
+                )
+            self._apply_pending_manual_exogenous_cards(public_actions_added)
 
         reward = self.round_reward if self.round_over else 0.0
         response = self._build_response(action_name=action_name, reward=reward)
@@ -856,6 +1014,8 @@ class BlackjackEnvironment:
                 "observed_shuffle_reset": self.observed_shuffle_reset,
                 "has_observed_shuffle_reference": self._observed_shuffle_reference_active,
                 "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
+                "last_exogenous_visible_cards": list(self.last_exogenous_visible_cards),
+                "last_exogenous_visible_event_types": list(self.last_exogenous_visible_event_types),
                 "discard_summary": self.get_discard_summary(),
             },
         }
@@ -910,6 +1070,8 @@ class BlackjackEnvironment:
                 "observed_shuffle_reset": self.observed_shuffle_reset,
                 "has_observed_shuffle_reference": self._observed_shuffle_reference_active,
                 "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
+                "last_exogenous_visible_cards": list(self.last_exogenous_visible_cards),
+                "last_exogenous_visible_event_types": list(self.last_exogenous_visible_event_types),
                 "hidden_burned_rounds": self.hidden_burned_rounds,
                 "hidden_burned_cards": self.hidden_burned_cards,
                 "hidden_burned_reshuffles": self.hidden_burned_reshuffles,
@@ -962,6 +1124,8 @@ class BlackjackEnvironment:
                     "hand_settlements": [hand.settlement for hand in self.player_hands],
                     "hand_close_reasons": [hand.close_reason for hand in self.player_hands],
                     "hand_count": len(self.player_hands),
+                    "exogenous_visible_cards": list(self.last_exogenous_visible_cards),
+                    "exogenous_visible_event_types": list(self.last_exogenous_visible_event_types),
                     "public_state": self._build_compact_public_state(),
                 },
             }
@@ -978,6 +1142,8 @@ class BlackjackEnvironment:
             "hand_rewards": [hand.reward for hand in self.player_hands],
             "hand_settlements": [hand.settlement for hand in self.player_hands],
             "hand_close_reasons": [hand.close_reason for hand in self.player_hands],
+            "exogenous_visible_cards": list(self.last_exogenous_visible_cards),
+            "exogenous_visible_event_types": list(self.last_exogenous_visible_event_types),
             "public_state": self.get_public_state(),
         }
         response = {
