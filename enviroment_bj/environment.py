@@ -109,6 +109,12 @@ class BlackjackEnvironment:
         self.observed_shuffle_reset = False
         self.hands_since_observed_shuffle = None
         self._observed_shuffle_reference_active = False
+        self._reset_observed_shuffle_derived_counters()
+
+    def _reset_observed_shuffle_derived_counters(self) -> None:
+        self._observed_cards_since_shuffle_count = 0
+        self._observed_low_cards_since_shuffle_count = 0
+        self._observed_high_cards_since_shuffle_count = 0
 
     def mark_observed_shuffle_reset(self) -> None:
         if not self.config.visible_shoe_change:
@@ -116,6 +122,7 @@ class BlackjackEnvironment:
         self.observed_shuffle_reset = True
         self.hands_since_observed_shuffle = 0
         self._observed_shuffle_reference_active = True
+        self._reset_observed_shuffle_derived_counters()
 
     def _advance_observed_shuffle_counter_for_new_round(self) -> None:
         if not self.config.visible_shoe_change:
@@ -924,6 +931,7 @@ class BlackjackEnvironment:
             features["observed_shuffle_reset"] = self.observed_shuffle_reset
             features["has_observed_shuffle_reference"] = self._observed_shuffle_reference_active
             features["hands_since_observed_shuffle"] = self.hands_since_observed_shuffle
+            features.update(self._build_observed_shuffle_derived_features())
 
         if obs_cfg.obs_include_estimated_shoe_progress and not self._hide_reshuffle_progress_from_observation():
             features["estimated_shoe_progress"] = self._build_estimated_shoe_progress()
@@ -935,6 +943,25 @@ class BlackjackEnvironment:
             features["recent_actions"] = self._get_recent_public_actions(obs_cfg.obs_recent_actions_window)
 
         return features
+
+    def _build_observed_shuffle_derived_features(self) -> dict[str, Any]:
+        if not self._observed_shuffle_reference_active or self._observed_cards_since_shuffle_count <= 0:
+            return {
+                "observed_cards_since_shuffle": 0,
+                "low_fraction_since_shuffle": 0.0,
+                "high_fraction_since_shuffle": 0.0,
+                "high_minus_low_balance": 0.0,
+            }
+
+        observed_cards_since_shuffle = self._observed_cards_since_shuffle_count
+        low_fraction = self._observed_low_cards_since_shuffle_count / observed_cards_since_shuffle
+        high_fraction = self._observed_high_cards_since_shuffle_count / observed_cards_since_shuffle
+        return {
+            "observed_cards_since_shuffle": observed_cards_since_shuffle,
+            "low_fraction_since_shuffle": low_fraction,
+            "high_fraction_since_shuffle": high_fraction,
+            "high_minus_low_balance": high_fraction - low_fraction,
+        }
 
     def get_observed_cards_summary(self, mode: str | None = None) -> dict[str, Any]:
         obs_cfg = self.config.observation
@@ -1235,6 +1262,13 @@ class BlackjackEnvironment:
             self._observed_group_counts["neutral"] += 1
         else:
             self._observed_group_counts["high"] += 1
+
+        if self._observed_shuffle_reference_active:
+            self._observed_cards_since_shuffle_count += 1
+            if card in LOW_RANKS:
+                self._observed_low_cards_since_shuffle_count += 1
+            elif card in HIGH_RANKS:
+                self._observed_high_cards_since_shuffle_count += 1
 
     def _record_public_action(
         self,

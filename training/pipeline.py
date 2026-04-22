@@ -107,6 +107,16 @@ class BlackjackRLTrainer:
             "device": str(self.device),
         }
 
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.epoch_index = int(state.get("epoch_index", 0))
+        self.env_step_count = int(state.get("env_step_count", 0))
+        self.update_count = int(state.get("update_count", 0))
+        self.epsilon_scheduler.load_state_dict(state.get("epsilon_scheduler", {}))
+        self.best_eval_metrics = deepcopy(state.get("best_eval_metrics"))
+        best_metric_name = self.pipeline_config.checkpoints.best_metric_name
+        if self.best_eval_metrics is not None and best_metric_name in self.best_eval_metrics:
+            self.checkpoints.best_metric_value = float(self.best_eval_metrics[best_metric_name])
+
     def _n_step_enabled(self) -> bool:
         return self.pipeline_config.n_step.enabled and self.pipeline_config.n_step.n_steps > 1
 

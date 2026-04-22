@@ -3,8 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from loss import BellmanLossConfig
+from loss import BellmanLossConfig, LossPhaseWeightConfig
 
 
 @dataclass(slots=True)
@@ -217,3 +218,26 @@ class TrainingPipelineConfig:
             raise TypeError("epsilon must be an EpsilonScheduleConfig or DualEpsilonConfig instance")
         if not isinstance(self.n_step, NStepConfig):
             raise TypeError("n_step must be an NStepConfig instance")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TrainingPipelineConfig:
+        trainer_config = dict(data.get("trainer", {}))
+        loss_config = dict(trainer_config.get("loss", {}))
+        phase_weights = LossPhaseWeightConfig(**loss_config.pop("phase_weights", {}))
+        trainer_config["loss"] = BellmanLossConfig(phase_weights=phase_weights, **loss_config)
+
+        epsilon_config = data.get("epsilon", {})
+        return cls(
+            trainer=TrainerConfig(**trainer_config),
+            replay_buffer=ReplayBufferConfig(**data.get("replay_buffer", {})),
+            epsilon=DualEpsilonConfig(
+                betting=EpsilonScheduleConfig(**epsilon_config.get("betting", {})),
+                playing=EpsilonScheduleConfig(**epsilon_config.get("playing", {})),
+            ),
+            n_step=NStepConfig(**data.get("n_step", {})),
+            optimization=OptimizationConfig(**data.get("optimization", {})),
+            target_update=TargetUpdateConfig(**data.get("target_update", {})),
+            evaluation=EvaluationConfig(**data.get("evaluation", {})),
+            checkpoints=CheckpointConfig(**data.get("checkpoints", {})),
+            prints=PrintConfig(**data.get("prints", {})),
+        )

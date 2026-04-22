@@ -26,6 +26,7 @@ from training import (
     train_one_epoch,
 )
 from training.epsilon import DualEpsilonScheduler
+from training.checkpoints import load_checkpoint_into_trainer
 from training.replay_buffer import RecurrentReplayBuffer
 from training.step import move_training_batch_to_device
 
@@ -265,6 +266,140 @@ class BlackjackTrainingPipelineTests(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "best_eval.pt").exists())
             self.assertTrue(any(path.name.startswith("step_") for path in Path(tmp_dir).glob("*.pt")))
             self.assert_finite_model(trainer.online_network)
+
+    def test_train_model_resume_restores_counts_and_continues_feedforward_training(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            initial_dir = Path(tmp_dir) / "initial"
+            resumed_dir = Path(tmp_dir) / "resumed"
+            initial_env = self.make_env(observation_profile="minimal_basic_strategy")
+            initial_model = FeedForwardDoubleDQN.from_profile("minimal_basic_strategy")
+            initial_config = self.make_pipeline_config(initial_dir, recurrent=False)
+            initial_result = train_model(initial_env, initial_model, pipeline_config=initial_config)
+
+            resumed_env = self.make_env(observation_profile="minimal_basic_strategy")
+            resumed_model = FeedForwardDoubleDQN.from_profile("minimal_basic_strategy")
+            resumed_config = self.make_pipeline_config(resumed_dir, recurrent=False)
+            resumed_result = train_model(
+                resumed_env,
+                resumed_model,
+                pipeline_config=resumed_config,
+                resume=True,
+                resume_checkpoint_path=initial_dir / "latest.pt",
+            )
+            resumed_trainer = resumed_result["trainer"]
+
+            self.assertEqual(resumed_trainer.epoch_index, initial_result["trainer"].epoch_index + 1)
+            self.assertGreater(resumed_trainer.env_step_count, initial_result["trainer"].env_step_count)
+            self.assertGreater(resumed_trainer.update_count, initial_result["trainer"].update_count)
+            self.assertEqual(resumed_result["history"][0]["epoch"], float(initial_result["trainer"].epoch_index + 1))
+            self.assertTrue((resumed_dir / "latest.pt").exists())
+            self.assert_finite_model(resumed_trainer.online_network)
+
+    def test_resume_accepts_new_env_config_without_extra_override_api(self) -> None:
+        initial_env = self.make_env(
+            observation_profile="table_realistic_unknown_progress",
+            start_state=StartStateConfig(
+                mode="unknown_progress",
+                min_burned_rounds=2,
+                max_burned_rounds=2,
+                hide_reshuffle_progress_from_observation=True,
+            ),
+        )
+        initial_model = DuelingRecurrentDoubleDQN.from_profile(
+            "table_realistic_unknown_progress",
+            recurrent_type="lstm",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            initial_dir = Path(tmp_dir) / "initial"
+            resumed_dir = Path(tmp_dir) / "resumed"
+            initial_config = self.make_pipeline_config(initial_dir, recurrent=True)
+            initial_result = train_model(initial_env, initial_model, pipeline_config=initial_config)
+
+            resumed_env = self.make_env(
+                observation_profile="table_realistic_unknown_progress",
+                start_state=StartStateConfig(
+                    mode="unknown_progress",
+                    min_burned_rounds=4,
+                    max_burned_rounds=4,
+                    hide_reshuffle_progress_from_observation=True,
+                ),
+                shoe_penetration=0.65,
+                dealer_hits_soft_17=True,
+                blackjack_payout=1.2,
+                bet_multipliers=(1, 2),
+            )
+            resumed_model = DuelingRecurrentDoubleDQN.from_profile(
+                "table_realistic_unknown_progress",
+                recurrent_type="lstm",
+            )
+            resumed_config = self.make_pipeline_config(resumed_dir, recurrent=True)
+            resumed_result = train_model(
+                resumed_env,
+                resumed_model,
+                pipeline_config=resumed_config,
+                resume=True,
+                resume_checkpoint_path=initial_dir / "latest.pt",
+            )
+            resumed_trainer = resumed_result["trainer"]
+            run_summary = resumed_trainer.build_run_summary()
+
+            self.assertEqual(resumed_trainer.epoch_index, initial_result["trainer"].epoch_index + 1)
+            self.assertGreater(resumed_trainer.update_count, initial_result["trainer"].update_count)
+            self.assertEqual(run_summary["shoe_penetration"], 0.65)
+            self.assertTrue(run_summary["dealer_hits_soft_17"])
+            self.assertEqual(resumed_trainer.envs[0].config.blackjack_payout, 1.2)
+            self.assertEqual(resumed_trainer.envs[0].config.bet_multipliers, (1, 2))
+
+    def test_resume_loader_pads_legacy_input_projection_weights_for_new_encoder_features(self) -> None:
+        env = self.make_env(
+            observation_profile="table_realistic_unknown_progress",
+            start_state=StartStateConfig(
+                mode="unknown_progress",
+                min_burned_rounds=2,
+                max_burned_rounds=2,
+                hide_reshuffle_progress_from_observation=True,
+            ),
+        )
+        model = DuelingRecurrentDoubleDQN.from_profile(
+            "table_realistic_unknown_progress",
+            recurrent_type="lstm",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = self.make_pipeline_config(Path(tmp_dir), recurrent=True)
+            source_trainer = build_trainer(env, model, pipeline_config=config)
+            legacy_online_state = source_trainer.online_network.state_dict()
+            legacy_target_state = source_trainer.target_network.state_dict()
+
+            truncated_online_weight = torch.full_like(legacy_online_state["input_projection.0.weight"][:, :-4], 2.0)
+            truncated_target_weight = torch.full_like(legacy_target_state["input_projection.0.weight"][:, :-4], 3.0)
+            legacy_online_state["input_projection.0.weight"] = truncated_online_weight
+            legacy_target_state["input_projection.0.weight"] = truncated_target_weight
+
+            restored_model = DuelingRecurrentDoubleDQN.from_profile(
+                "table_realistic_unknown_progress",
+                recurrent_type="lstm",
+            )
+            restored_trainer = build_trainer(env, restored_model, pipeline_config=config)
+            checkpoint = {
+                "online_model_state_dict": legacy_online_state,
+                "target_model_state_dict": legacy_target_state,
+                "optimizer_state_dict": source_trainer.optimizer.state_dict(),
+                "scheduler_state_dict": (
+                    source_trainer.scheduler.state_dict() if source_trainer.scheduler is not None else None
+                ),
+                "trainer_state": source_trainer.state_dict(),
+            }
+
+            load_checkpoint_into_trainer(restored_trainer, checkpoint)
+
+            restored_online_weight = restored_trainer.online_network.input_projection[0].weight.detach()
+            restored_target_weight = restored_trainer.target_network.input_projection[0].weight.detach()
+            self.assertTrue(torch.allclose(restored_online_weight[:, :-4], truncated_online_weight))
+            self.assertTrue(torch.allclose(restored_target_weight[:, :-4], truncated_target_weight))
+            self.assertTrue(torch.count_nonzero(restored_online_weight[:, -4:]).item() == 0)
+            self.assertTrue(torch.count_nonzero(restored_target_weight[:, -4:]).item() == 0)
 
     def test_replay_buffer_stores_compact_encoded_states_instead_of_raw_responses(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")
