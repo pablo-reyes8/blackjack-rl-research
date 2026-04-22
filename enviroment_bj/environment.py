@@ -44,6 +44,12 @@ HIDDEN_TABLE_RULES = {"dealer_peeks_for_blackjack", "n_decks", "shoe_penetration
 LOW_RANKS = {"2", "3", "4", "5", "6"}
 NEUTRAL_RANKS = {"7", "8", "9"}
 HIGH_RANKS = {"10", "J", "Q", "K", "A"}
+STAND_ACTION_INDEX = ACTION_ORDER.index("stand")
+HIT_ACTION_INDEX = ACTION_ORDER.index("hit")
+DOUBLE_ACTION_INDEX = ACTION_ORDER.index("double")
+SPLIT_ACTION_INDEX = ACTION_ORDER.index("split")
+SURRENDER_ACTION_INDEX = ACTION_ORDER.index("surrender")
+INSURANCE_ACTION_INDEX = ACTION_ORDER.index("insurance")
 
 
 class BlackjackEnvironment:
@@ -83,6 +89,15 @@ class BlackjackEnvironment:
             self.enable_transition_recording = bool(enable_transition_recording)
         if compact_response_mode is not None:
             self.compact_response_mode = bool(compact_response_mode)
+
+    def _use_compact_training_fast_path(self) -> bool:
+        return self.compact_response_mode and not self.enable_transition_recording
+
+    def _should_store_observed_card_history(self) -> bool:
+        return not self._use_compact_training_fast_path()
+
+    def _should_store_public_action_history(self) -> bool:
+        return not self._use_compact_training_fast_path() or self.config.observation.obs_include_recent_actions
 
     def _initialize_temporal_state(self) -> None:
         self.shuffle_count = 0
@@ -134,6 +149,41 @@ class BlackjackEnvironment:
         if self.observed_shuffle_reset:
             self.observed_shuffle_reset = False
 
+    def _build_compact_action_mask(self) -> list[int]:
+        mask = [0] * len(ACTION_ORDER)
+        if self.round_over:
+            return mask
+
+        if self.decision_phase == "betting":
+            for action_index in self._bet_action_indices:
+                mask[action_index] = 1
+            return mask
+
+        if self.decision_phase != "playing":
+            raise RuntimeError(f"Unsupported decision phase '{self.decision_phase}'")
+
+        hand = self._current_hand()
+        if hand is None:
+            return mask
+
+        if self.insurance_offer_active and self.insurance_bet == 0:
+            mask[INSURANCE_ACTION_INDEX] = 1
+
+        if hand.is_blackjack():
+            mask[STAND_ACTION_INDEX] = 1
+            return mask
+
+        mask[STAND_ACTION_INDEX] = 1
+        if self._can_hit(hand):
+            mask[HIT_ACTION_INDEX] = 1
+        if self._can_double(hand):
+            mask[DOUBLE_ACTION_INDEX] = 1
+        if self._can_split(hand):
+            mask[SPLIT_ACTION_INDEX] = 1
+        if self._can_surrender(hand):
+            mask[SURRENDER_ACTION_INDEX] = 1
+        return mask
+
     def _build_bet_action_cache(self) -> None:
         self._available_bet_multipliers = tuple(self.config.bet_multipliers)
         self._available_bet_multipliers_list = list(self._available_bet_multipliers)
@@ -141,6 +191,7 @@ class BlackjackEnvironment:
             f"bet_{multiplier}x": self.config.base_bet * float(multiplier)
             for multiplier in self._available_bet_multipliers
         }
+        self._bet_action_indices = tuple(ACTION_ORDER.index(action_name) for action_name in self._bet_amount_by_action)
 
     def _build_table_rule_caches(self) -> None:
         full_rules = {
@@ -380,7 +431,7 @@ class BlackjackEnvironment:
 
     def reset(self) -> dict[str, Any]:
         self._reset_round_state()
-        public_actions_added: list[dict[str, Any]] = []
+        public_actions_added: list[dict[str, Any]] | None = [] if self.enable_transition_recording else None
 
         self._prepare_episode_start()
         self._apply_pending_manual_exogenous_cards(public_actions_added)
@@ -414,7 +465,7 @@ class BlackjackEnvironment:
             action_mask_before=None,
             action_mask_by_name_before=None,
             response=response,
-            drawn_cards=[],
+            drawn_cards=[] if self.enable_transition_recording else None,
             public_actions_added=public_actions_added,
         )
         return response
@@ -572,8 +623,8 @@ class BlackjackEnvironment:
         if not action_mask_by_name_before.get(action_name, False):
             raise ValueError(f"Illegal action '{action_name}' for the current state")
 
-        drawn_cards: list[dict[str, Any]] = []
-        public_actions_added: list[dict[str, Any]] = []
+        drawn_cards: list[dict[str, Any]] | None = [] if self.enable_transition_recording else None
+        public_actions_added: list[dict[str, Any]] | None = [] if self.enable_transition_recording else None
 
         if self.decision_phase == "betting":
             initial_bet = self._bet_amount_by_action.get(action_name)
@@ -1127,15 +1178,13 @@ class BlackjackEnvironment:
         }
 
     def _build_response(self, *, action_name: str | None, reward: float) -> dict[str, Any]:
-        action_mask_by_name = self.legal_actions()
-        action_mask = [int(action_mask_by_name[name]) for name in ACTION_ORDER]
         observation = self.get_agent_observation()
 
-        if self.compact_response_mode and not self.enable_transition_recording:
+        if self._use_compact_training_fast_path():
             response = {
                 "observation": observation,
                 "table_rules": self._cached_visible_table_rules,
-                "action_mask": action_mask,
+                "action_mask": self._build_compact_action_mask(),
                 "reward": reward,
                 "done": self.round_over,
                 "terminated": self.round_over,
@@ -1158,6 +1207,9 @@ class BlackjackEnvironment:
             }
             self._consume_observed_shuffle_pulse()
             return response
+
+        action_mask_by_name = self.legal_actions()
+        action_mask = [int(action_mask_by_name[name]) for name in ACTION_ORDER]
 
         info = {
             "action": action_name,
@@ -1197,8 +1249,8 @@ class BlackjackEnvironment:
         action_mask_before: list[int] | None,
         action_mask_by_name_before: dict[str, bool] | None,
         response: dict[str, Any],
-        drawn_cards: list[dict[str, Any]],
-        public_actions_added: list[dict[str, Any]],
+        drawn_cards: list[dict[str, Any]] | None,
+        public_actions_added: list[dict[str, Any]] | None,
     ) -> None:
         if not self.enable_transition_recording:
             response["info"]["transition_log_length"] = 0
@@ -1232,27 +1284,29 @@ class BlackjackEnvironment:
     def _draw_card(
         self,
         recipient: str,
-        drawn_cards: list[dict[str, Any]],
+        drawn_cards: list[dict[str, Any]] | None,
         *,
         hand_index: int | None = None,
         visible: bool,
         public_source: str | None = None,
     ) -> str:
         card = self.shoe.draw()
-        event: dict[str, Any] = {"recipient": recipient, "card": card, "visible": visible}
-        if hand_index is not None:
-            event["hand_index"] = hand_index
-        drawn_cards.append(event)
+        if self.enable_transition_recording and drawn_cards is not None:
+            event: dict[str, Any] = {"recipient": recipient, "card": card, "visible": visible}
+            if hand_index is not None:
+                event["hand_index"] = hand_index
+            drawn_cards.append(event)
 
         if visible:
             self._observe_public_card(card, source=public_source or recipient, hand_index=hand_index)
         return card
 
     def _observe_public_card(self, card: str, *, source: str, hand_index: int | None = None) -> None:
-        event: dict[str, Any] = {"card": card, "source": source, "round_index": self.round_index}
-        if hand_index is not None:
-            event["hand_index"] = hand_index
-        self.observed_cards_history.append(event)
+        if self._should_store_observed_card_history():
+            event: dict[str, Any] = {"card": card, "source": source, "round_index": self.round_index}
+            if hand_index is not None:
+                event["hand_index"] = hand_index
+            self.observed_cards_history.append(event)
         self._observed_rank_counts[card] += 1
         self._observed_cards_count += 1
         self._recent_observed_cards.append(card)
@@ -1278,6 +1332,9 @@ class BlackjackEnvironment:
         action: str,
         **details: Any,
     ) -> dict[str, Any]:
+        if not self._should_store_public_action_history() and not self.enable_transition_recording:
+            return {}
+
         event = {
             "actor": actor,
             "action": action,
@@ -1285,8 +1342,9 @@ class BlackjackEnvironment:
             "round_index": self.round_index,
         }
         event.update(details)
-        self.public_action_history.append(event)
-        if public_actions_added is not None:
+        if self._should_store_public_action_history():
+            self.public_action_history.append(event)
+        if self.enable_transition_recording and public_actions_added is not None:
             public_actions_added.append(event)
         return event
 

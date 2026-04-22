@@ -19,6 +19,9 @@ from .utils import (
 )
 
 
+PROGRESS_BUCKET_TO_INDEX = {value: index for index, value in enumerate(PROGRESS_BUCKET_VALUES)}
+
+
 class ObservedCardsHistoryEncoder(BaseFeatureEncoder):
     def __init__(self, config: EncoderConfig) -> None:
         super().__init__()
@@ -97,11 +100,7 @@ class TemporalFeatureEncoder(BaseFeatureEncoder):
         )
 
         estimated_progress = temporal.get("estimated_shoe_progress") or {}
-        bucket_index = (
-            PROGRESS_BUCKET_VALUES.index(estimated_progress["bucket"])
-            if estimated_progress.get("bucket") in PROGRESS_BUCKET_VALUES
-            else None
-        )
+        bucket_index = PROGRESS_BUCKET_TO_INDEX.get(estimated_progress.get("bucket"))
         progress_tensor = torch.cat(
             [
                 torch.tensor([safe_float(estimated_progress.get("fraction_used"))], dtype=torch.float32),
@@ -123,7 +122,7 @@ class TemporalFeatureEncoder(BaseFeatureEncoder):
                     ],
                     dtype=torch.float32,
                 ),
-                settlement_count_vector(outcome.get("hand_settlements")).to(torch.float32),
+                settlement_count_vector(outcome.get("hand_settlements")),
             ],
             dim=0,
         )

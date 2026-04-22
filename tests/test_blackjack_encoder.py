@@ -31,6 +31,23 @@ class BlackjackEncoderTests(unittest.TestCase):
         config_kwargs.update(config_overrides)
         return BlackjackEnvironment(config=BlackjackConfig(**config_kwargs), seed=11, start_state=start_state)
 
+    def assert_encode_state_only_matches_reference(self, encoder: BlackjackObservationEncoder, response: dict[str, object]) -> None:
+        observation = response.get("observation") or {}
+        table_rules = response.get("table_rules") or {}
+        reference_modules = [module.encode(observation, table_rules) for module in encoder.modules_by_name.values()]
+        reference_state_vector = (
+            torch.cat(reference_modules, dim=0)
+            if reference_modules
+            else torch.zeros(0, dtype=torch.float32)
+        )
+        reference_action_mask = encoder._resolve_action_mask(response)
+        if encoder.config.encode_action_mask_features:
+            reference_state_vector = torch.cat([reference_state_vector, reference_action_mask.to(torch.float32)], dim=0)
+
+        encoded = encoder.encode_state_only(response)
+        self.assertTrue(torch.equal(encoded["action_mask"], reference_action_mask))
+        self.assertTrue(torch.allclose(encoded["state_vector"], reference_state_vector))
+
     def test_minimal_encoder_returns_single_step_tensors_with_expected_shapes(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")
         env.load_shoe(["10", "6", "7", "10"], total_cards=4)
@@ -171,6 +188,35 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertAlmostEqual(float(after_temporal[-3].item()), 1.0 / 3.0, places=6)
         self.assertAlmostEqual(float(after_temporal[-2].item()), 1.0 / 3.0, places=6)
         self.assertEqual(float(after_temporal[-1].item()), 0.0)
+
+    def test_encode_state_only_matches_reference_for_complex_realistic_response(self) -> None:
+        env = self.make_env(observation_profile="table_realistic_default")
+        env.load_shoe(["8", "6", "8", "10", "3", "K", "2", "10", "9", "5"], total_cards=10)
+        env.reset()
+        env.step("bet_1x")
+        response = env.step("split")
+        encoder = BlackjackObservationEncoder.from_profile("table_realistic_default")
+
+        self.assert_encode_state_only_matches_reference(encoder, response)
+
+    def test_encode_state_only_matches_reference_for_unknown_progress_and_mask_features(self) -> None:
+        env = self.make_env(
+            observation_profile="table_realistic_unknown_progress",
+            start_state=StartStateConfig(
+                mode="unknown_progress",
+                min_burned_rounds=3,
+                max_burned_rounds=3,
+                hide_reshuffle_progress_from_observation=True,
+            ),
+        )
+        response = env.reset()
+        response = env.step("bet_1x")
+        encoder = BlackjackObservationEncoder.from_profile(
+            "table_realistic_unknown_progress",
+            encode_action_mask_features=True,
+        )
+
+        self.assert_encode_state_only_matches_reference(encoder, response)
 
     def test_encode_batch_stacks_responses_into_bxd(self) -> None:
         env = self.make_env(observation_profile="minimal_basic_strategy")

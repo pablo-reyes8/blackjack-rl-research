@@ -9,8 +9,7 @@ from .config import EncoderConfig
 from .constants import AVAILABLE_BET_MULTIPLIERS
 from .utils import (
     card_total_features,
-    cards_to_padded_rank_tensor,
-    cards_to_presence_mask,
+    cards_to_padded_rank_tensor_and_mask,
     normalize_scalar,
     rank_one_hot,
     safe_bool,
@@ -64,8 +63,11 @@ class HandFeatureEncoder(BaseFeatureEncoder):
         else:
             total_features = card_total_features(current_hand_cards, self.config.max_current_hand_cards)
 
-        card_matrix = cards_to_padded_rank_tensor(current_hand_cards, self.config.max_current_hand_cards).flatten()
-        card_mask = cards_to_presence_mask(current_hand_cards, self.config.max_current_hand_cards)
+        card_matrix, card_mask = cards_to_padded_rank_tensor_and_mask(
+            current_hand_cards,
+            self.config.max_current_hand_cards,
+        )
+        card_matrix = card_matrix.flatten()
         return torch.cat([card_matrix, card_mask, total_features, dealer_one_hot, dealer_value], dim=0)
 
 
@@ -75,6 +77,7 @@ class OtherHandsEncoder(BaseFeatureEncoder):
         self.config = config
         self.per_hand_dim = config.max_cards_per_hand * 13 + config.max_cards_per_hand + 7
         self.output_dim = config.max_other_hands * self.per_hand_dim
+        self._zero_hand = torch.zeros(self.per_hand_dim, dtype=torch.float32)
 
     def encode(self, observation: Mapping[str, Any], table_rules: Mapping[str, Any]) -> torch.Tensor:
         hands = observation.get("other_player_hands_visible") or []
@@ -83,8 +86,8 @@ class OtherHandsEncoder(BaseFeatureEncoder):
 
         for hand in list(hands)[: self.config.max_other_hands]:
             cards = hand.get("cards")
-            card_matrix = cards_to_padded_rank_tensor(cards, self.config.max_cards_per_hand).flatten()
-            card_mask = cards_to_presence_mask(cards, self.config.max_cards_per_hand)
+            card_matrix, card_mask = cards_to_padded_rank_tensor_and_mask(cards, self.config.max_cards_per_hand)
+            card_matrix = card_matrix.flatten()
             totals = card_total_features(cards, self.config.max_cards_per_hand)
             flags = torch.tensor(
                 [
@@ -98,7 +101,7 @@ class OtherHandsEncoder(BaseFeatureEncoder):
             encoded_hands.append(torch.cat([card_matrix, card_mask, totals, flags], dim=0))
 
         while len(encoded_hands) < self.config.max_other_hands:
-            encoded_hands.append(torch.zeros(self.per_hand_dim, dtype=torch.float32))
+            encoded_hands.append(self._zero_hand)
 
         return torch.cat(encoded_hands, dim=0)
 

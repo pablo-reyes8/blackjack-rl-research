@@ -77,9 +77,9 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
     def encode_state_only(self, response: Mapping[str, Any]) -> dict[str, Any]:
         observation = response.get("observation") or {}
         table_rules = response.get("table_rules") or {}
-        module_tensors = [module(observation, table_rules).to(torch.float32) for module in self.modules_by_name.values()]
-        state_vector = torch.cat(module_tensors, dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
         action_mask = self._resolve_action_mask(response)
+        module_tensors = [module.encode(observation, table_rules) for module in self.modules_by_name.values()]
+        state_vector = torch.cat(module_tensors, dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
 
         if self.config.encode_action_mask_features:
             state_vector = torch.cat([state_vector, action_mask.to(torch.float32)], dim=0)
@@ -95,7 +95,7 @@ class BlackjackObservationEncoder(BaseBlackjackEncoder):
         module_tensors: OrderedDict[str, torch.Tensor] = OrderedDict()
 
         for name, module in self.modules_by_name.items():
-            tensor = module(observation, table_rules).to(torch.float32)
+            tensor = module.encode(observation, table_rules)
             module_tensors[name] = tensor
 
         state_vector = torch.cat(list(module_tensors.values()), dim=0) if module_tensors else torch.zeros(0, dtype=torch.float32)
