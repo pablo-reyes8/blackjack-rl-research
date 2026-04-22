@@ -404,20 +404,31 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 
 ## Limitations and next steps
 
+## Limitations and next steps
+
 **What is already strong:**
-- Environment fidelity and rule configurability
-- Encoder flexibility
-- Explicit bet-sizing plus hand-play modeling
-- Recurrent RL training pipeline with phase-aware exploration and monitoring
-- Reproducible preset-driven workflows
+- High-fidelity blackjack environment with broad rule configurability
+- Realistic partial-observation setups, including unknown shoe progress
+- Flexible encoder with modular feature blocks for hand state, rules, temporal context, observed card history, discard summary, and visible shoe-change signals
+- Explicit two-phase decision modeling: bet sizing and hand play
+- Recurrent Double/Dueling DQN pipeline with phase-aware exploration
+- Phase-aware loss weighting for betting vs. playing
+- Optional phase adapters and module gating in the network
+- N-step training support
+- Resume-from-checkpoint workflow for iterative training
+- Support for exogenous visible-card events, including both training heuristics and future manual injection from a visual scraper
+- Reproducible preset-driven workflows and checkpointed experimentation
+- Expanded monitoring with train/validation behavior gaps and richer betting/playing diagnostics
 
 **What is still missing or intentionally left lightweight:**
-- No published benchmark table yet
-- No experiment tracking backend integration (e.g., W&B)
+- No published benchmark table yet across standard blackjack settings or ablations
+- No benchmark against basic strategy, card-counting baselines, or simple betting heuristics yet
+- No experiment tracking backend integration (e.g. W&B)
 - No hyperparameter sweep orchestration
 - No pre-trained model zoo
 - No prioritized replay yet
-- No distributed or multi-node training support
+- No explicit calibration layer for betting confidence / risk control
+- No published study yet on robustness across different table populations, shoe penetrations, and exogenous-card profiles
 
 ---
 
