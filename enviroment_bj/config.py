@@ -83,7 +83,7 @@ class ObservationConfig:
     obs_include_hands_since_shuffle: bool = True
     obs_include_estimated_shoe_progress: bool = True
     obs_include_last_hand_outcome: bool = False
-    obs_include_recent_actions: bool = False
+    obs_include_recent_actions: bool = True
     obs_recent_actions_window: int = 5
     obs_include_observed_cards_history: bool = True
     obs_observed_cards_mode: str = "rank_counts"
@@ -130,7 +130,7 @@ class ObservationConfig:
                 obs_include_hands_since_shuffle=False,
                 obs_include_estimated_shoe_progress=False,
                 obs_include_last_hand_outcome=False,
-                obs_include_recent_actions=False,
+                obs_include_recent_actions=True,
                 obs_include_observed_cards_history=True,
                 obs_observed_cards_mode="rank_counts",
                 obs_recent_cards_window=20,
@@ -157,7 +157,7 @@ class ObservationConfig:
                 obs_include_estimated_shoe_progress=True,
                 obs_include_last_hand_outcome=True,
                 obs_include_recent_actions=True,
-                obs_recent_actions_window=10,
+                obs_recent_actions_window=5,
                 obs_include_observed_cards_history=True,
                 obs_observed_cards_mode="rank_counts",
                 obs_recent_cards_window=20,

@@ -137,9 +137,16 @@ class BlackjackEncoderTests(unittest.TestCase):
         self.assertNotIn("estimated_shoe_progress", response["observation"]["temporal_context"])
 
     def test_temporal_encoder_includes_observed_shuffle_signal_and_derived_shoe_features(self) -> None:
-        env = self.make_env(observation_profile="table_realistic_default", visible_shoe_change=True)
+        env = self.make_env(
+            observation_profile="table_realistic_default",
+            observation_overrides={"obs_include_recent_actions": False},
+            visible_shoe_change=True,
+        )
         env.load_shoe(["10", "6", "7", "10", "10", "9", "5", "2"], total_cards=8)
-        encoder = BlackjackObservationEncoder.from_profile("table_realistic_default")
+        encoder = BlackjackObservationEncoder.from_profile(
+            "table_realistic_default",
+            encode_recent_actions=False,
+        )
 
         before = env.reset()
         env.mark_observed_shuffle_reset()

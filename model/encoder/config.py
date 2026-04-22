@@ -12,7 +12,7 @@ class EncoderConfig:
     encode_temporal: bool = True
     encode_observed_history: bool = True
     encode_discard_summary: bool = True
-    encode_recent_actions: bool = False
+    encode_recent_actions: bool = True
     encode_exact_shoe: bool = False
     encode_action_mask_features: bool = False
     card_encoding: str = "one_hot_rank"
@@ -80,12 +80,12 @@ class EncoderConfig:
                 encode_temporal=True,
                 encode_observed_history=True,
                 encode_discard_summary=True,
-                encode_recent_actions=False,
+                encode_recent_actions=True,
                 encode_exact_shoe=False,
                 encode_action_mask_features=False,
                 history_encoding="rank_counts",
                 use_visible_table_rules_only=True,
-                max_recent_actions=8,
+                max_recent_actions=5,
             )
 
         if profile == "table_realistic_unknown_progress":
@@ -97,12 +97,12 @@ class EncoderConfig:
                 encode_temporal=True,
                 encode_observed_history=True,
                 encode_discard_summary=True,
-                encode_recent_actions=False,
+                encode_recent_actions=True,
                 encode_exact_shoe=False,
                 encode_action_mask_features=False,
                 history_encoding="rank_counts",
                 use_visible_table_rules_only=True,
-                max_recent_actions=8,
+                max_recent_actions=5,
             )
 
         if profile == "fully_observable_sim":
@@ -119,7 +119,7 @@ class EncoderConfig:
                 encode_action_mask_features=False,
                 history_encoding="rank_counts",
                 use_visible_table_rules_only=False,
-                max_recent_actions=10,
+                max_recent_actions=5,
             )
 
         raise ValueError(
