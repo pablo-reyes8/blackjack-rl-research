@@ -73,7 +73,7 @@ class TemporalFeatureEncoder(BaseFeatureEncoder):
     def __init__(self, config: EncoderConfig) -> None:
         super().__init__()
         self.config = config
-        self.base_dim = 7 + 4 + (5 + len(HAND_SETTLEMENT_VALUES)) + 2
+        self.base_dim = 7 + 4 + (5 + len(HAND_SETTLEMENT_VALUES)) + 3
         self.recent_actions_dim = (
             config.max_recent_actions * len(PUBLIC_ACTION_TOKENS) + config.max_recent_actions
             if config.encode_recent_actions
@@ -131,6 +131,7 @@ class TemporalFeatureEncoder(BaseFeatureEncoder):
         observed_shuffle_tensor = torch.tensor(
             [
                 safe_bool(temporal.get("observed_shuffle_reset")),
+                safe_bool(temporal.get("has_observed_shuffle_reference")),
                 normalize_scalar(temporal.get("hands_since_observed_shuffle"), 100.0),
             ],
             dtype=torch.float32,

@@ -128,17 +128,20 @@ class BlackjackEnvironmentTests(unittest.TestCase):
 
         betting = self.reset_to_betting(env)
         self.assertFalse(betting["observation"]["observed_shuffle_reset"])
-        self.assertEqual(betting["observation"]["hands_since_observed_shuffle"], 0)
+        self.assertFalse(betting["observation"]["has_observed_shuffle_reference"])
+        self.assertIsNone(betting["observation"]["hands_since_observed_shuffle"])
 
         env.mark_observed_shuffle_reset()
         playing = env.step("bet_1x")
         self.assertTrue(playing["observation"]["observed_shuffle_reset"])
+        self.assertTrue(playing["observation"]["has_observed_shuffle_reference"])
         self.assertEqual(playing["observation"]["hands_since_observed_shuffle"], 0)
 
         done = env.step("stand")
         next_round = self.reset_to_betting(env)
         self.assertFalse(done["observation"]["observed_shuffle_reset"])
         self.assertFalse(next_round["observation"]["observed_shuffle_reset"])
+        self.assertTrue(next_round["observation"]["has_observed_shuffle_reference"])
         self.assertEqual(next_round["observation"]["hands_since_observed_shuffle"], 1)
 
     def test_auto_reshuffle_sets_observed_shuffle_signal_when_visible(self) -> None:
@@ -151,6 +154,7 @@ class BlackjackEnvironmentTests(unittest.TestCase):
 
         self.assertTrue(next_round["info"]["public_state"]["shoe"]["reshuffled_on_reset"])
         self.assertTrue(next_round["observation"]["observed_shuffle_reset"])
+        self.assertTrue(next_round["observation"]["has_observed_shuffle_reference"])
         self.assertEqual(next_round["observation"]["hands_since_observed_shuffle"], 0)
 
     def test_observed_shuffle_signal_can_be_disabled_per_table(self) -> None:
@@ -164,6 +168,7 @@ class BlackjackEnvironmentTests(unittest.TestCase):
 
         self.assertTrue(next_round["info"]["public_state"]["shoe"]["reshuffled_on_reset"])
         self.assertNotIn("observed_shuffle_reset", temporal)
+        self.assertNotIn("has_observed_shuffle_reference", temporal)
         self.assertNotIn("hands_since_observed_shuffle", temporal)
 
     def test_observed_cards_history_resets_after_shuffle_when_enabled(self) -> None:

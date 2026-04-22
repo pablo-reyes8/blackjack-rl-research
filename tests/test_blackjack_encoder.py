@@ -150,8 +150,10 @@ class BlackjackEncoderTests(unittest.TestCase):
         before_temporal = before_encoded["module_tensors"]["temporal"]
         after_temporal = after_encoded["module_tensors"]["temporal"]
 
+        self.assertEqual(float(before_temporal[-3].item()), 0.0)
         self.assertEqual(float(before_temporal[-2].item()), 0.0)
         self.assertEqual(float(before_temporal[-1].item()), 0.0)
+        self.assertEqual(float(after_temporal[-3].item()), 1.0)
         self.assertEqual(float(after_temporal[-2].item()), 1.0)
         self.assertEqual(float(after_temporal[-1].item()), 0.0)
 

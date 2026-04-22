@@ -105,7 +105,7 @@ class BlackjackEnvironment:
 
     def _reset_observed_shuffle_signal(self) -> None:
         self.observed_shuffle_reset = False
-        self.hands_since_observed_shuffle = 0
+        self.hands_since_observed_shuffle = None
         self._observed_shuffle_reference_active = False
 
     def mark_observed_shuffle_reset(self) -> None:
@@ -686,6 +686,7 @@ class BlackjackEnvironment:
 
         if self.config.visible_shoe_change:
             observation["observed_shuffle_reset"] = self.observed_shuffle_reset
+            observation["has_observed_shuffle_reference"] = self._observed_shuffle_reference_active
             observation["hands_since_observed_shuffle"] = self.hands_since_observed_shuffle
 
         if self.dealer_cards:
@@ -763,6 +764,7 @@ class BlackjackEnvironment:
 
         if self.config.visible_shoe_change:
             features["observed_shuffle_reset"] = self.observed_shuffle_reset
+            features["has_observed_shuffle_reference"] = self._observed_shuffle_reference_active
             features["hands_since_observed_shuffle"] = self.hands_since_observed_shuffle
 
         if obs_cfg.obs_include_estimated_shoe_progress and not self._hide_reshuffle_progress_from_observation():
@@ -852,6 +854,7 @@ class BlackjackEnvironment:
                 "recent_actions": self._get_recent_public_actions(10),
                 "observed_cards_count": len(self.observed_cards_history),
                 "observed_shuffle_reset": self.observed_shuffle_reset,
+                "has_observed_shuffle_reference": self._observed_shuffle_reference_active,
                 "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
                 "discard_summary": self.get_discard_summary(),
             },
@@ -905,6 +908,7 @@ class BlackjackEnvironment:
                 "observed_cards_history": deepcopy(self.observed_cards_history),
                 "public_action_history": deepcopy(self.public_action_history),
                 "observed_shuffle_reset": self.observed_shuffle_reset,
+                "has_observed_shuffle_reference": self._observed_shuffle_reference_active,
                 "hands_since_observed_shuffle": self.hands_since_observed_shuffle,
                 "hidden_burned_rounds": self.hidden_burned_rounds,
                 "hidden_burned_cards": self.hidden_burned_cards,
