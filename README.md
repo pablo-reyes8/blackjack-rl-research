@@ -389,7 +389,7 @@ docker run --rm blackjack-rl \
 
 ---
 
-## ✅ Testing and CI
+## Testing and CI
 
 Run the test suite locally:
 ```bash
