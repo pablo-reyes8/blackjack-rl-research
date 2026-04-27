@@ -97,6 +97,10 @@ class TrainingLogger:
                 f"phase_loss_w={summary.get('phase_loss_weights_enabled', False)} "
                 f"(bet {summary.get('betting_loss_weight', 0.0):.2f}, play {summary.get('playing_loss_weight', 0.0):.2f}) | "
                 f"phase_adapters={summary.get('use_phase_adapters', False)} | module_gating={summary.get('use_module_gating', False)}",
+                "  Transfer   : "
+                f"enabled={summary.get('transfer_enabled', False)} | warm_start={summary.get('warm_start_checkpoint_path') or 'none'} | "
+                f"teacher={summary.get('teacher_checkpoint_path') or 'none'} | distill={summary.get('distillation_enabled', False)} "
+                f"({summary.get('distillation_mode')}, {summary.get('distillation_weight', 0.0):.3f}->{summary.get('distillation_final_weight', 0.0):.3f})",
                 "  Eval / CKPT: "
                 f"eval_rounds={int(summary.get('eval_rounds', 0))} | eval_decisions={int(summary.get('eval_max_decisions', 0))} | "
                 f"checkpoints={summary.get('checkpoint_dir')}",
@@ -134,7 +138,8 @@ class TrainingLogger:
                 f"upd/s={updates_per_sec:.1f} | buffer={int(metrics.get('buffer_size', 0))}",
                 "  Policy : "
                 f"eps_bet={metrics.get('epsilon_betting', 0.0):.4f} | eps_play={metrics.get('epsilon_playing', 0.0):.4f} | "
-                f"n_step={metrics.get('mean_n_steps', 1.0):.2f} | phase_w={metrics.get('mean_phase_weight', 1.0):.2f}",
+                f"n_step={metrics.get('mean_n_steps', 1.0):.2f} | phase_w={metrics.get('mean_phase_weight', 1.0):.2f} | "
+                f"distill={metrics.get('distillation_loss', 0.0):.6f} @ {metrics.get('distillation_weight', 0.0):.3f}",
             ],
         )
 

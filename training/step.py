@@ -8,7 +8,8 @@ from torch import nn
 
 from loss import compute_td_loss
 
-from .config import OptimizationConfig, TargetUpdateConfig
+from .config import DistillationConfig, OptimizationConfig, TargetUpdateConfig
+from .transfer_learning import compute_distillation_loss, distillation_weight
 
 
 def _infer_model_device(model: nn.Module) -> torch.device:
@@ -93,6 +94,9 @@ def train_gradient_step(
     loss_config: Any,
     optimization_config: OptimizationConfig,
     scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+    teacher_model: nn.Module | None = None,
+    distillation_config: DistillationConfig | None = None,
+    update_count: int = 0,
 ) -> dict[str, Any]:
     start_time = perf_counter()
     online_network.train()
@@ -108,7 +112,30 @@ def train_gradient_step(
         loss_type=loss_config.loss_type,
         config=loss_config,
     )
-    loss_info["loss"].backward()
+    td_loss = loss_info["loss"]
+    total_loss = td_loss
+    distill_loss = td_loss.new_zeros(())
+    lambda_distill = 0.0
+    teacher_output: dict[str, Any] | None = None
+    if teacher_model is not None and distillation_config is not None and distillation_config.enabled:
+        teacher_state = batch.get("teacher_state")
+        if teacher_state is None:
+            raise ValueError("teacher_state is required in the batch when distillation is enabled")
+        teacher_model.eval()
+        with torch.no_grad():
+            teacher_output = teacher_model(teacher_state)
+        lambda_distill = distillation_weight(distillation_config, update_count)
+        distill_loss = compute_distillation_loss(
+            student_output=loss_info["current_output"],
+            teacher_output=teacher_output,
+            action_mask=batch["action_mask"],
+            config=distillation_config,
+            playing_action_slice=online_network.play_action_slice,
+            valid_rows=batch.get("padding_mask"),
+        )
+        total_loss = td_loss + (distill_loss * lambda_distill)
+
+    total_loss.backward()
 
     if optimization_config.gradient_clipping:
         grad_norm = float(
@@ -126,6 +153,11 @@ def train_gradient_step(
     metrics = dict(loss_info["metrics"])
     metrics.update(
         {
+            "td_loss": float(td_loss.detach().item()),
+            "distillation_loss": float(distill_loss.detach().item()),
+            "distillation_weight": float(lambda_distill),
+            "total_loss": float(total_loss.detach().item()),
+            "loss": float(total_loss.detach().item()),
             "grad_norm": grad_norm,
             "learning_rate": learning_rate,
             "update_time_sec": elapsed,
@@ -134,5 +166,9 @@ def train_gradient_step(
 
     return {
         **loss_info,
+        "loss": total_loss,
+        "td_loss": td_loss,
+        "distillation_loss": distill_loss,
+        "teacher_output": teacher_output,
         "metrics": metrics,
     }

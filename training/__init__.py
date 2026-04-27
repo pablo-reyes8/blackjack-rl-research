@@ -1,5 +1,6 @@
 from .config import (
     CheckpointConfig,
+    DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
@@ -8,16 +9,35 @@ from .config import (
     PrintConfig,
     ReplayBufferConfig,
     TargetUpdateConfig,
+    TransferLearningConfig,
     TrainerConfig,
     TrainingPipelineConfig,
 )
 from .epoch import train_one_epoch
 from .pipeline import BlackjackRLTrainer, build_trainer
 from .train import train_model
+from .transfer_learning import (
+    adapt_response_to_minimal_basic_strategy,
+    build_model_from_config,
+    build_optimizer_with_param_groups,
+    compute_distillation_loss,
+    compute_greedy_ce_distillation_loss,
+    compute_policy_kl_distillation_loss,
+    compute_q_distillation_loss,
+    distillation_weight,
+    encode_teacher_state,
+    freeze_module,
+    freeze_playing_policy_parts,
+    load_checkpoint_payload,
+    load_teacher_model,
+    unfreeze_module,
+    warm_start_model_from_checkpoint,
+)
 
 __all__ = [
     "BlackjackRLTrainer",
     "CheckpointConfig",
+    "DistillationConfig",
     "DualEpsilonConfig",
     "EpsilonScheduleConfig",
     "EvaluationConfig",
@@ -26,9 +46,25 @@ __all__ = [
     "PrintConfig",
     "ReplayBufferConfig",
     "TargetUpdateConfig",
+    "TransferLearningConfig",
     "TrainerConfig",
     "TrainingPipelineConfig",
+    "adapt_response_to_minimal_basic_strategy",
     "build_trainer",
+    "build_model_from_config",
+    "build_optimizer_with_param_groups",
+    "compute_distillation_loss",
+    "compute_greedy_ce_distillation_loss",
+    "compute_policy_kl_distillation_loss",
+    "compute_q_distillation_loss",
+    "distillation_weight",
+    "encode_teacher_state",
+    "freeze_module",
+    "freeze_playing_policy_parts",
+    "load_checkpoint_payload",
+    "load_teacher_model",
     "train_model",
     "train_one_epoch",
+    "unfreeze_module",
+    "warm_start_model_from_checkpoint",
 ]

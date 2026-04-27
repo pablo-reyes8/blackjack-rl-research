@@ -158,6 +158,39 @@ class CheckpointConfig:
 
 
 @dataclass(slots=True)
+class DistillationConfig:
+    enabled: bool = False
+    weight: float = 0.0
+    mode: str = "q_mse"
+    temperature: float = 1.0
+    playing_only: bool = True
+    decay_steps: int = 50_000
+    final_weight: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.weight < 0 or self.final_weight < 0:
+            raise ValueError("weight and final_weight must be non-negative")
+        if self.temperature <= 0:
+            raise ValueError("temperature must be positive")
+        if self.mode not in {"q_mse", "policy_kl", "greedy_ce"}:
+            raise ValueError("mode must be 'q_mse', 'policy_kl', or 'greedy_ce'")
+        if self.decay_steps <= 0:
+            raise ValueError("decay_steps must be positive")
+
+
+@dataclass(slots=True)
+class TransferLearningConfig:
+    enabled: bool = False
+    teacher_checkpoint_path: str | None = None
+    warm_start_checkpoint_path: str | None = None
+    distillation: DistillationConfig = field(default_factory=DistillationConfig)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.distillation, DistillationConfig):
+            raise TypeError("distillation must be a DistillationConfig instance")
+
+
+@dataclass(slots=True)
 class PrintConfig:
     enable: bool = True
     print_run_summary: bool = True
@@ -209,6 +242,7 @@ class TrainingPipelineConfig:
     target_update: TargetUpdateConfig = field(default_factory=TargetUpdateConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     checkpoints: CheckpointConfig = field(default_factory=CheckpointConfig)
+    transfer: TransferLearningConfig = field(default_factory=TransferLearningConfig)
     prints: PrintConfig = field(default_factory=PrintConfig)
 
     def __post_init__(self) -> None:
@@ -218,6 +252,8 @@ class TrainingPipelineConfig:
             raise TypeError("epsilon must be an EpsilonScheduleConfig or DualEpsilonConfig instance")
         if not isinstance(self.n_step, NStepConfig):
             raise TypeError("n_step must be an NStepConfig instance")
+        if not isinstance(self.transfer, TransferLearningConfig):
+            raise TypeError("transfer must be a TransferLearningConfig instance")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrainingPipelineConfig:
@@ -227,6 +263,8 @@ class TrainingPipelineConfig:
         trainer_config["loss"] = BellmanLossConfig(phase_weights=phase_weights, **loss_config)
 
         epsilon_config = data.get("epsilon", {})
+        transfer_config = dict(data.get("transfer", {}))
+        distillation_config = DistillationConfig(**transfer_config.pop("distillation", {}))
         return cls(
             trainer=TrainerConfig(**trainer_config),
             replay_buffer=ReplayBufferConfig(**data.get("replay_buffer", {})),
@@ -239,5 +277,6 @@ class TrainingPipelineConfig:
             target_update=TargetUpdateConfig(**data.get("target_update", {})),
             evaluation=EvaluationConfig(**data.get("evaluation", {})),
             checkpoints=CheckpointConfig(**data.get("checkpoints", {})),
+            transfer=TransferLearningConfig(distillation=distillation_config, **transfer_config),
             prints=PrintConfig(**data.get("prints", {})),
         )

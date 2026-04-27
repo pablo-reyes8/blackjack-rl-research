@@ -21,6 +21,7 @@ from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForw
 from model.encoder import EncoderConfig
 from training import (
     CheckpointConfig,
+    DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
     EvaluationConfig,
@@ -29,6 +30,7 @@ from training import (
     PrintConfig,
     ReplayBufferConfig,
     TargetUpdateConfig,
+    TransferLearningConfig,
     TrainerConfig,
     TrainingPipelineConfig,
 )
@@ -205,6 +207,11 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
     target_update = TargetUpdateConfig(**_ensure_mapping(values.get("target_update"), context="training.target_update"))
     evaluation = EvaluationConfig(**_ensure_mapping(values.get("evaluation"), context="training.evaluation"))
     checkpoints = CheckpointConfig(**_ensure_mapping(values.get("checkpoints"), context="training.checkpoints"))
+    transfer_data = _ensure_mapping(values.get("transfer"), context="training.transfer")
+    distillation = DistillationConfig(
+        **_ensure_mapping(transfer_data.pop("distillation", None), context="training.transfer.distillation")
+    )
+    transfer = TransferLearningConfig(distillation=distillation, **transfer_data)
     prints = PrintConfig(**_ensure_mapping(values.get("prints"), context="training.prints"))
 
     return TrainingPipelineConfig(
@@ -216,6 +223,7 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
         target_update=target_update,
         evaluation=evaluation,
         checkpoints=checkpoints,
+        transfer=transfer,
         prints=prints,
     )
 

@@ -21,6 +21,7 @@ from .metrics import BehaviorMetricsTracker, ScalarMetricAccumulator
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
 from .replay_buffer import FeedForwardReplayBuffer, RecurrentReplayBuffer
 from .step import build_optimizer, build_scheduler, hard_update_target, maybe_update_target, train_gradient_step
+from .transfer_learning import encode_teacher_state, load_teacher_model
 
 
 @dataclass(slots=True)
@@ -58,6 +59,7 @@ class BlackjackRLTrainer:
         self.rng = random.Random(self.pipeline_config.trainer.seed)
         self.logger = TrainingLogger(self.pipeline_config.prints)
         self.checkpoints = CheckpointManager(self.pipeline_config.checkpoints)
+        self.teacher_model = self._build_teacher_model()
         self.is_recurrent = self.online_network.config.architecture != "feedforward"
         self.replay_buffer = (
             RecurrentReplayBuffer(self.pipeline_config.replay_buffer, rng=self.rng)
@@ -75,6 +77,14 @@ class BlackjackRLTrainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.pipeline_config.trainer.seed)
 
+    def _build_teacher_model(self) -> Any | None:
+        transfer_config = self.pipeline_config.transfer
+        if not transfer_config.enabled or not transfer_config.distillation.enabled:
+            return None
+        if transfer_config.teacher_checkpoint_path is None:
+            raise ValueError("transfer.teacher_checkpoint_path is required when distillation is enabled")
+        return load_teacher_model(transfer_config.teacher_checkpoint_path, device=self.device)
+
     def _set_env_runtime_mode(self, *, enable_transition_recording: bool) -> None:
         for env in self.envs:
             if hasattr(env, "set_runtime_options"):
@@ -85,10 +95,15 @@ class BlackjackRLTrainer:
 
     def _encode_response_for_storage(self, response: dict[str, Any]) -> dict[str, Any]:
         encoded = self.online_network.encoder.encode_state_only(response)
-        return {
+        output = {
             "state_vector": encoded["state_vector"].detach().cpu(),
             "action_mask": encoded["action_mask"].detach().cpu(),
         }
+        if self.teacher_model is not None:
+            teacher_state = encode_teacher_state(self.teacher_model, response)
+            output["teacher_state_vector"] = teacher_state["state_vector"]
+            output["teacher_action_mask"] = teacher_state["action_mask"]
+        return output
 
     def _resolve_device(self, device_name: str) -> torch.device:
         if device_name == "auto":
@@ -253,6 +268,13 @@ class BlackjackRLTrainer:
             "playing_loss_weight": self.pipeline_config.trainer.loss.phase_weights.playing_weight,
             "use_module_gating": bool(getattr(model_config, "use_module_gating", False)),
             "use_phase_adapters": bool(getattr(model_config, "use_phase_adapters", False)),
+            "transfer_enabled": self.pipeline_config.transfer.enabled,
+            "warm_start_checkpoint_path": self.pipeline_config.transfer.warm_start_checkpoint_path,
+            "teacher_checkpoint_path": self.pipeline_config.transfer.teacher_checkpoint_path,
+            "distillation_enabled": self.pipeline_config.transfer.distillation.enabled,
+            "distillation_mode": self.pipeline_config.transfer.distillation.mode,
+            "distillation_weight": self.pipeline_config.transfer.distillation.weight,
+            "distillation_final_weight": self.pipeline_config.transfer.distillation.final_weight,
             "n_decks": reference_env.config.n_decks,
             "shoe_penetration": reference_env.config.shoe_penetration,
             "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
@@ -438,6 +460,9 @@ class BlackjackRLTrainer:
             loss_config=self.pipeline_config.trainer.loss,
             optimization_config=self.pipeline_config.optimization,
             scheduler=self.scheduler,
+            teacher_model=self.teacher_model,
+            distillation_config=self.pipeline_config.transfer.distillation,
+            update_count=self.update_count,
         )
         self.update_count += 1
         target_synced = maybe_update_target(

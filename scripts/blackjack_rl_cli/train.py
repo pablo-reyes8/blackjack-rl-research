@@ -60,6 +60,7 @@ def main() -> None:
             "best_eval_metrics": result["best_eval_metrics"],
             "state": result["state"],
             "checkpoint_dir": result["checkpoint_dir"],
+            "warm_start_report": result.get("warm_start_report"),
         },
     }
     saved_path = write_json_file(summary_path, payload)

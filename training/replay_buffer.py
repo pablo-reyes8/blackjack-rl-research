@@ -30,7 +30,7 @@ class FeedForwardReplayBuffer:
         if not self.can_sample():
             raise ValueError("Replay buffer does not contain enough transitions to sample a batch")
         transitions = self.rng.sample(list(self.storage), self.config.batch_size)
-        return {
+        batch = {
             "state": [transition["state"] for transition in transitions],
             "next_state": [transition["next_state"] for transition in transitions],
             "action": torch.tensor([transition["action"] for transition in transitions], dtype=torch.long),
@@ -43,6 +43,20 @@ class FeedForwardReplayBuffer:
                 dim=0,
             ).to(torch.bool),
         }
+        if transitions and "teacher_state_vector" in transitions[0]["state"]:
+            batch["teacher_state"] = {
+                "state_vector": torch.stack(
+                    [transition["state"]["teacher_state_vector"] for transition in transitions],
+                    dim=0,
+                ).to(torch.float32),
+                "action_mask": torch.stack(
+                    [transition["state"]["teacher_action_mask"] for transition in transitions],
+                    dim=0,
+                ).to(torch.bool),
+                "module_tensors": {},
+                "metadata": {"batch_size": len(transitions)},
+            }
+        return batch
 
 
 class RecurrentReplayBuffer:
@@ -82,6 +96,14 @@ class RecurrentReplayBuffer:
         action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
         next_action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
         sequence_lengths: list[int] = []
+        has_teacher_state = bool(sequences and "teacher_state_vector" in sequences[0]["state"][0])
+        teacher_state_dim = 0
+        teacher_state_vector = None
+        teacher_action_mask = None
+        if has_teacher_state:
+            teacher_state_dim = sequences[0]["state"][0]["teacher_state_vector"].shape[0]
+            teacher_state_vector = torch.zeros((batch_size, max_len, teacher_state_dim), dtype=torch.float32)
+            teacher_action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
 
         for batch_index, sequence in enumerate(sequences):
             truncated_len = min(len(sequence["action"]), max_len)
@@ -105,8 +127,17 @@ class RecurrentReplayBuffer:
                 sequence["next_action_mask"][:truncated_len],
                 dim=0,
             ).to(torch.bool)
+            if has_teacher_state and teacher_state_vector is not None and teacher_action_mask is not None:
+                teacher_state_vector[batch_index, :truncated_len] = torch.stack(
+                    [step["teacher_state_vector"] for step in sequence["state"][:truncated_len]],
+                    dim=0,
+                ).to(torch.float32)
+                teacher_action_mask[batch_index, :truncated_len] = torch.stack(
+                    [step["teacher_action_mask"] for step in sequence["state"][:truncated_len]],
+                    dim=0,
+                ).to(torch.bool)
 
-        return {
+        batch = {
             "state": {
                 "state_vector": state_vector,
                 "action_mask": action_mask,
@@ -129,3 +160,12 @@ class RecurrentReplayBuffer:
             "action_mask": action_mask,
             "next_action_mask": next_action_mask,
         }
+        if has_teacher_state and teacher_state_vector is not None and teacher_action_mask is not None:
+            batch["teacher_state"] = {
+                "state_vector": teacher_state_vector,
+                "action_mask": teacher_action_mask,
+                "padding_mask": padding_mask,
+                "module_tensors": {},
+                "metadata": {"batch_size": batch_size, "sequence_lengths": sequence_lengths},
+            }
+        return batch
