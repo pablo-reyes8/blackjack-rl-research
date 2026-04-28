@@ -67,6 +67,56 @@ class TrainingLogger:
         )
         return lines
 
+    def _format_distribution_from_values(self, values: dict[str, Any], actions: tuple[str, ...]) -> str:
+        return " ".join(f"{action}:{float(values.get(action, 0.0)):.2f}" for action in actions)
+
+    def _format_signed_metric(self, value: Any) -> str:
+        return f"{float(value):+.4f}" if isinstance(value, (int, float)) else "n/a"
+
+    def _format_betting_auxiliary_eval(self, metrics: dict[str, Any]) -> list[str]:
+        if "count_proxy_valid_states" not in metrics:
+            return []
+
+        valid_states = int(metrics.get("count_proxy_valid_states", 0))
+        lines = [
+            "  Bet Aux : "
+            f"n={valid_states} | proxy_mean={metrics.get('count_proxy_mean', 0.0):+.3f} | "
+            f"p10={metrics.get('count_proxy_p10', 0.0):+.3f} | p50={metrics.get('count_proxy_p50', 0.0):+.3f} | "
+            f"p90={metrics.get('count_proxy_p90', 0.0):+.3f}",
+        ]
+        target_distribution = metrics.get("count_proxy_target_bet_distribution") or {}
+        if isinstance(target_distribution, dict):
+            lines.append(
+                "           target " + self._format_distribution_from_values(target_distribution, BET_ACTION_ORDER)
+            )
+
+        bucket_stats = metrics.get("count_proxy_bucket_stats") or {}
+        if not isinstance(bucket_stats, dict):
+            return lines
+
+        for bucket_name in ("low", "medium", "high", "very_high"):
+            bucket = bucket_stats.get(bucket_name)
+            if not isinstance(bucket, dict) or float(bucket.get("n_states", 0.0)) <= 0:
+                continue
+            lines.append(
+                "           "
+                f"{bucket_name:<9} n={int(bucket.get('n_states', 0))} | "
+                f"mean_q_bet_1x={self._format_signed_metric(bucket.get('mean_q_bet_1x'))} | "
+                f"mean_q_bet_2x={self._format_signed_metric(bucket.get('mean_q_bet_2x'))} | "
+                f"mean_q_bet_3x={self._format_signed_metric(bucket.get('mean_q_bet_3x'))} | "
+                f"mean_q_bet_4x={self._format_signed_metric(bucket.get('mean_q_bet_4x'))}"
+            )
+            lines.append(
+                "           "
+                f"{bucket_name:<9} greedy "
+                f"bet_1x:{float(bucket.get('greedy_bet_1x_frac', 0.0)):.2f} "
+                f"bet_2x:{float(bucket.get('greedy_bet_2x_frac', 0.0)):.2f} "
+                f"bet_3x:{float(bucket.get('greedy_bet_3x_frac', 0.0)):.2f} "
+                f"bet_4x:{float(bucket.get('greedy_bet_4x_frac', 0.0)):.2f} | "
+                f"margin={self._format_signed_metric(bucket.get('mean_margin_best_aggressive_vs_1x'))}"
+            )
+        return lines
+
     def log_warmup(self, *, buffer_size: int, target_size: int, force: bool = False) -> None:
         if not self.config.enable:
             return
@@ -123,6 +173,10 @@ class TrainingLogger:
                 f"enabled={summary.get('transfer_enabled', False)} | warm_start={summary.get('warm_start_checkpoint_path') or 'none'} | "
                 f"teacher={summary.get('teacher_checkpoint_path') or 'none'} | distill={summary.get('distillation_enabled', False)} "
                 f"({summary.get('distillation_mode')}, {summary.get('distillation_weight', 0.0):.3f}->{summary.get('distillation_final_weight', 0.0):.3f})",
+                "  Bet Aux    : "
+                f"enabled={summary.get('betting_auxiliary_enabled', False)} | mode={summary.get('betting_auxiliary_mode')} | "
+                f"weight={summary.get('betting_auxiliary_weight', 0.0):.3f}->{summary.get('betting_auxiliary_final_weight', 0.0):.3f} | "
+                f"min_obs={int(summary.get('betting_auxiliary_min_observed_cards', 0))}",
                 "  Eval / CKPT: "
                 f"eval_rounds={int(summary.get('eval_rounds', 0))} | eval_decisions={int(summary.get('eval_max_decisions', 0))} | "
                 f"checkpoints={summary.get('checkpoint_dir')}",
@@ -161,7 +215,8 @@ class TrainingLogger:
                 "  Policy : "
                 f"eps_bet={metrics.get('epsilon_betting', 0.0):.4f} | eps_play={metrics.get('epsilon_playing', 0.0):.4f} | "
                 f"n_step={metrics.get('mean_n_steps', 1.0):.2f} | phase_w={metrics.get('mean_phase_weight', 1.0):.2f} | "
-                f"distill={metrics.get('distillation_loss', 0.0):.6f} @ {metrics.get('distillation_weight', 0.0):.3f}",
+                f"distill={metrics.get('distillation_loss', 0.0):.6f} @ {metrics.get('distillation_weight', 0.0):.3f} | "
+                f"bet_aux={metrics.get('bet_aux_loss', 0.0):.6f} @ {metrics.get('bet_aux_weight', 0.0):.3f}",
             ],
         )
 
@@ -204,7 +259,9 @@ class TrainingLogger:
                 "  Reward  : "
                 f"reward/round={summary.get('reward_per_round', 0.0):.4f} | EV/1000={summary.get('ev_per_1000_hands', 0.0):.2f} | round_std={summary.get('round_reward_std', 0.0):.4f}",
                 "  Policy  : "
-                f"eps_bet={summary.get('epsilon_betting', 0.0):.4f} | eps_play={summary.get('epsilon_playing', 0.0):.4f} | lr={summary.get('learning_rate', 0.0):.2e} | grad={summary.get('grad_norm', 0.0):.4f}",
+                f"eps_bet={summary.get('epsilon_betting', 0.0):.4f} | eps_play={summary.get('epsilon_playing', 0.0):.4f} | "
+                f"lr={summary.get('learning_rate', 0.0):.2e} | grad={summary.get('grad_norm', 0.0):.4f} | "
+                f"bet_aux={summary.get('bet_aux_loss', 0.0):.6f} @ {summary.get('bet_aux_weight', 0.0):.3f}",
                 "  Outcomes: "
                 f"win={summary.get('win_rate', 0.0):.4f} | push={summary.get('push_rate', 0.0):.4f} | loss={summary.get('loss_rate', 0.0):.4f} | blackjack={summary.get('blackjack_rate', 0.0):.4f} | bust={summary.get('bust_rate', 0.0):.4f}",
                 "  Betting : "
@@ -239,6 +296,7 @@ class TrainingLogger:
             "           bet_EV " + self._format_bet_ev(metrics),
         ]
         lines.extend(self._format_bet_q_diagnostics(metrics))
+        lines.extend(self._format_betting_auxiliary_eval(metrics))
         lines.extend(
             [
                 "  Playing : "

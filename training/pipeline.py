@@ -12,6 +12,7 @@ from enviroment_bj.core import ACTION_ORDER
 from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN
 
 from .checkpoints import CheckpointManager
+from .betting_auxiliary import compute_observed_hi_lo_proxy_from_response
 from .config import TrainingPipelineConfig
 from .env_factory import clone_environments, normalize_envs
 from .epsilon import DualEpsilonScheduler
@@ -93,7 +94,7 @@ class BlackjackRLTrainer:
                     compact_response_mode=not enable_transition_recording,
                 )
 
-    def _encode_response_for_storage(self, response: dict[str, Any]) -> dict[str, Any]:
+    def _encode_response_for_storage(self, response: dict[str, Any], *, env: Any | None = None) -> dict[str, Any]:
         encoded = self.online_network.encoder.encode_state_only(response)
         output = {
             "state_vector": encoded["state_vector"].detach().cpu(),
@@ -103,6 +104,13 @@ class BlackjackRLTrainer:
             teacher_state = encode_teacher_state(self.teacher_model, response)
             output["teacher_state_vector"] = teacher_state["state_vector"]
             output["teacher_action_mask"] = teacher_state["action_mask"]
+        if self.pipeline_config.betting_auxiliary.enabled:
+            n_decks = getattr(getattr(env, "config", None), "n_decks", 8)
+            auxiliary = compute_observed_hi_lo_proxy_from_response(response, n_decks=int(n_decks))
+            output["betting_auxiliary"] = {
+                "true_count_proxy": torch.tensor(auxiliary["true_count_proxy"], dtype=torch.float32),
+                "observed_cards": torch.tensor(auxiliary["observed_cards"], dtype=torch.long),
+            }
         return output
 
     def _resolve_device(self, device_name: str) -> torch.device:
@@ -275,6 +283,11 @@ class BlackjackRLTrainer:
             "distillation_mode": self.pipeline_config.transfer.distillation.mode,
             "distillation_weight": self.pipeline_config.transfer.distillation.weight,
             "distillation_final_weight": self.pipeline_config.transfer.distillation.final_weight,
+            "betting_auxiliary_enabled": self.pipeline_config.betting_auxiliary.enabled,
+            "betting_auxiliary_mode": self.pipeline_config.betting_auxiliary.mode,
+            "betting_auxiliary_weight": self.pipeline_config.betting_auxiliary.weight,
+            "betting_auxiliary_final_weight": self.pipeline_config.betting_auxiliary.final_weight,
+            "betting_auxiliary_min_observed_cards": self.pipeline_config.betting_auxiliary.min_observed_cards,
             "n_decks": reference_env.config.n_decks,
             "shoe_penetration": reference_env.config.shoe_penetration,
             "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
@@ -395,7 +408,7 @@ class BlackjackRLTrainer:
                     tracker.record_round_result(next_response, env_key=str(env_index))
                     self.env_step_count += 1
                     self.epsilon_scheduler.step(decision_phase)
-                    encoded_next_response = self._encode_response_for_storage(next_response)
+                    encoded_next_response = self._encode_response_for_storage(next_response, env=env_state.env)
 
                     transition = {
                         "state": env_state.encoded_response,
@@ -430,7 +443,7 @@ class BlackjackRLTrainer:
                 env_state.pending_n_step = []
 
             env_state.response = env_state.env.reset()
-            env_state.encoded_response = self._encode_response_for_storage(env_state.response)
+            env_state.encoded_response = self._encode_response_for_storage(env_state.response, env=env_state.env)
             if self.is_recurrent and env_state.hidden_state is None:
                 env_state.hidden_state = self.online_network.init_hidden(batch_size=1, device=self.device)
 
@@ -462,6 +475,7 @@ class BlackjackRLTrainer:
             scheduler=self.scheduler,
             teacher_model=self.teacher_model,
             distillation_config=self.pipeline_config.transfer.distillation,
+            betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
             update_count=self.update_count,
         )
         self.update_count += 1
@@ -496,6 +510,7 @@ class BlackjackRLTrainer:
             max_decisions=self.pipeline_config.evaluation.max_decisions,
             rng=random.Random(self.pipeline_config.trainer.seed + self.epoch_index),
             reset_hidden_on_round_end=self.pipeline_config.trainer.reset_hidden_on_round_end,
+            betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
         )
 
     def train_one_epoch(self) -> dict[str, Any]:

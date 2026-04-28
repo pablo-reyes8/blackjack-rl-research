@@ -10,6 +10,7 @@ from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForw
 from model.encoder import BlackjackObservationEncoder, EncoderConfig
 
 from training import (
+    BettingAuxiliaryConfig,
     CheckpointConfig,
     DistillationConfig,
     DualEpsilonConfig,
@@ -386,6 +387,17 @@ def run_blackjack_transfer_stage(
     phase_weights_enabled: bool = True,
     betting_loss_weight: float = 0.25,
     playing_loss_weight: float = 1.50,
+    axu_loss_bet: bool = False,
+    betting_auxiliary_enabled: bool | None = None,
+    betting_auxiliary_mode: str = "count_proxy_ce",
+    betting_auxiliary_weight: float = 0.10,
+    betting_auxiliary_final_weight: float = 0.02,
+    betting_auxiliary_decay_steps: int = 50_000,
+    betting_auxiliary_threshold_2x: float = 1.0,
+    betting_auxiliary_threshold_3x: float = 2.0,
+    betting_auxiliary_threshold_4x: float = 4.0,
+    betting_auxiliary_min_observed_cards: int = 12,
+    betting_auxiliary_betting_phase_only: bool = True,
 
     # Epsilon
     betting_epsilon_start: float = 0.20,
@@ -568,6 +580,20 @@ def run_blackjack_transfer_stage(
         expose_shoe_composition=expose_shoe_composition,
     )
     _apply_overrides(blackjack_config, blackjack_overrides)
+    resolved_betting_auxiliary_enabled = axu_loss_bet if betting_auxiliary_enabled is None else betting_auxiliary_enabled
+    resolved_bet_multipliers = tuple(int(multiplier) for multiplier in blackjack_config.bet_multipliers)
+    if resolved_betting_auxiliary_enabled:
+        if resolved_bet_multipliers != (1, 2, 3, 4):
+            raise ValueError(
+                "axu_loss_bet/betting_auxiliary_enabled currently requires bet_multipliers=(1, 2, 3, 4)"
+            )
+        if (
+            not bool(getattr(observation_config, "obs_include_observed_cards_history", False))
+            and not bool(getattr(observation_config, "obs_include_discard_summary", False))
+        ):
+            raise ValueError(
+                "Betting auxiliary mode requires observed history or discard summary in the observation"
+            )
 
     envs: list[BlackjackEnvironment] = []
     resolved_penetrations = _resolve_env_penetrations(
@@ -709,6 +735,20 @@ def run_blackjack_transfer_stage(
     )
     _apply_overrides(checkpoint_config, checkpoint_overrides)
 
+    betting_auxiliary_config = BettingAuxiliaryConfig(
+        enabled=resolved_betting_auxiliary_enabled,
+        mode=betting_auxiliary_mode,
+        weight=betting_auxiliary_weight,
+        final_weight=betting_auxiliary_final_weight,
+        decay_steps=betting_auxiliary_decay_steps,
+        threshold_2x=betting_auxiliary_threshold_2x,
+        threshold_3x=betting_auxiliary_threshold_3x,
+        threshold_4x=betting_auxiliary_threshold_4x,
+        min_observed_cards=betting_auxiliary_min_observed_cards,
+        betting_phase_only=betting_auxiliary_betting_phase_only,
+        bet_multipliers=resolved_bet_multipliers,
+    )
+
     print_config = PrintConfig(
         enable=enable_prints,
         print_run_summary=print_run_summary,
@@ -764,6 +804,7 @@ def run_blackjack_transfer_stage(
         target_update=target_update_config,
         evaluation=evaluation_config,
         checkpoints=checkpoint_config,
+        betting_auxiliary=betting_auxiliary_config,
         transfer=transfer_config,
         prints=print_config,
     )
@@ -796,6 +837,10 @@ def run_blackjack_transfer_stage(
         "teacher_checkpoint_path": transfer_config.teacher_checkpoint_path,
         "distillation_enabled": transfer_config.distillation.enabled,
         "bet_multipliers": blackjack_config.bet_multipliers,
+        "betting_auxiliary_enabled": betting_auxiliary_config.enabled,
+        "betting_auxiliary_mode": betting_auxiliary_config.mode,
+        "betting_auxiliary_weight": betting_auxiliary_config.weight,
+        "betting_auxiliary_final_weight": betting_auxiliary_config.final_weight,
         "state_dim": model.state_dim,
         "use_optimizer_param_groups": use_optimizer_param_groups,
         "freeze_playing_parts": freeze_playing_parts,

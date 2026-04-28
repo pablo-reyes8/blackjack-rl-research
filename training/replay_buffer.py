@@ -56,6 +56,17 @@ class FeedForwardReplayBuffer:
                 "module_tensors": {},
                 "metadata": {"batch_size": len(transitions)},
             }
+        if transitions and "betting_auxiliary" in transitions[0]["state"]:
+            batch["betting_auxiliary"] = {
+                "true_count_proxy": torch.stack(
+                    [transition["state"]["betting_auxiliary"]["true_count_proxy"] for transition in transitions],
+                    dim=0,
+                ).to(torch.float32),
+                "observed_cards": torch.stack(
+                    [transition["state"]["betting_auxiliary"]["observed_cards"] for transition in transitions],
+                    dim=0,
+                ).to(torch.long),
+            }
         return batch
 
 
@@ -104,6 +115,12 @@ class RecurrentReplayBuffer:
             teacher_state_dim = sequences[0]["state"][0]["teacher_state_vector"].shape[0]
             teacher_state_vector = torch.zeros((batch_size, max_len, teacher_state_dim), dtype=torch.float32)
             teacher_action_mask = torch.zeros((batch_size, max_len, num_actions), dtype=torch.bool)
+        has_betting_auxiliary = bool(sequences and "betting_auxiliary" in sequences[0]["state"][0])
+        true_count_proxy = None
+        observed_cards = None
+        if has_betting_auxiliary:
+            true_count_proxy = torch.zeros((batch_size, max_len), dtype=torch.float32)
+            observed_cards = torch.zeros((batch_size, max_len), dtype=torch.long)
 
         for batch_index, sequence in enumerate(sequences):
             truncated_len = min(len(sequence["action"]), max_len)
@@ -136,6 +153,15 @@ class RecurrentReplayBuffer:
                     [step["teacher_action_mask"] for step in sequence["state"][:truncated_len]],
                     dim=0,
                 ).to(torch.bool)
+            if has_betting_auxiliary and true_count_proxy is not None and observed_cards is not None:
+                true_count_proxy[batch_index, :truncated_len] = torch.stack(
+                    [step["betting_auxiliary"]["true_count_proxy"] for step in sequence["state"][:truncated_len]],
+                    dim=0,
+                ).to(torch.float32)
+                observed_cards[batch_index, :truncated_len] = torch.stack(
+                    [step["betting_auxiliary"]["observed_cards"] for step in sequence["state"][:truncated_len]],
+                    dim=0,
+                ).to(torch.long)
 
         batch = {
             "state": {
@@ -167,5 +193,10 @@ class RecurrentReplayBuffer:
                 "padding_mask": padding_mask,
                 "module_tensors": {},
                 "metadata": {"batch_size": batch_size, "sequence_lengths": sequence_lengths},
+            }
+        if has_betting_auxiliary and true_count_proxy is not None and observed_cards is not None:
+            batch["betting_auxiliary"] = {
+                "true_count_proxy": true_count_proxy,
+                "observed_cards": observed_cards,
             }
         return batch

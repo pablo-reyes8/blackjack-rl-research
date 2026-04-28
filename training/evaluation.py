@@ -9,6 +9,8 @@ import torch
 
 from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER
 
+from .betting_auxiliary import BettingAuxiliaryEvaluationTracker, compute_observed_hi_lo_proxy_from_response
+from .config import BettingAuxiliaryConfig
 from .metrics import BehaviorMetricsTracker
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
 
@@ -29,6 +31,7 @@ def evaluate_policy(
     max_decisions: int,
     rng: random.Random,
     reset_hidden_on_round_end: bool,
+    betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
 ) -> dict[str, Any]:
     model.eval()
     tracker = BehaviorMetricsTracker()
@@ -39,6 +42,11 @@ def evaluate_policy(
     bet_q_counts: dict[str, int] = defaultdict(int)
     best_aggressive_margin_total = 0.0
     best_aggressive_margin_count = 0
+    betting_auxiliary_tracker = (
+        BettingAuxiliaryEvaluationTracker()
+        if betting_auxiliary_config is not None and betting_auxiliary_config.enabled
+        else None
+    )
     available_bet_multipliers = tuple(
         int(multiplier)
         for multiplier in getattr(getattr(envs[0], "config", None), "bet_multipliers", ())
@@ -89,6 +97,17 @@ def evaluate_policy(
                     if q_bet_1x is not None and best_aggressive_q is not None:
                         best_aggressive_margin_total += best_aggressive_q - q_bet_1x
                         best_aggressive_margin_count += 1
+                    if betting_auxiliary_tracker is not None and betting_auxiliary_config is not None:
+                        proxy_info = compute_observed_hi_lo_proxy_from_response(
+                            env_state.response,
+                            n_decks=int(getattr(env_state.env.config, "n_decks", 8)),
+                        )
+                        betting_auxiliary_tracker.record(
+                            q_values=q_values,
+                            action_mask=action_mask,
+                            proxy_info=proxy_info,
+                            config=betting_auxiliary_config,
+                        )
 
                 action_index, was_random = select_epsilon_greedy_action(
                     masked_q_values=masked_q_values,
@@ -141,4 +160,6 @@ def evaluate_policy(
             if bet_q_counts[action_name] > 0
             else None
         )
+    if betting_auxiliary_tracker is not None:
+        summary.update(betting_auxiliary_tracker.summary())
     return summary

@@ -76,6 +76,7 @@ def main() -> None:
         max_decisions=max_decisions,
         rng=random.Random(evaluation_seed),
         reset_hidden_on_round_end=checkpoint_pipeline.trainer.reset_hidden_on_round_end,
+        betting_auxiliary_config=checkpoint_pipeline.betting_auxiliary,
     )
 
     result = {

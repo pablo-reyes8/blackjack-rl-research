@@ -168,6 +168,26 @@ class TrainingLoggingTests(unittest.TestCase):
                     "mean_q_bet_3x": -0.04,
                     "mean_q_bet_4x": -0.08,
                     "mean_margin_best_aggressive_vs_1x": -0.09,
+                    "count_proxy_valid_states": 120,
+                    "count_proxy_mean": 1.35,
+                    "count_proxy_p10": -0.75,
+                    "count_proxy_p50": 1.10,
+                    "count_proxy_p90": 3.85,
+                    "count_proxy_target_bet_distribution": {"bet_1x": 0.45, "bet_2x": 0.25, "bet_3x": 0.20, "bet_4x": 0.10},
+                    "count_proxy_bucket_stats": {
+                        "high": {
+                            "n_states": 18.0,
+                            "mean_q_bet_1x": -0.10,
+                            "mean_q_bet_2x": 0.02,
+                            "mean_q_bet_3x": 0.08,
+                            "mean_q_bet_4x": 0.01,
+                            "greedy_bet_1x_frac": 0.20,
+                            "greedy_bet_2x_frac": 0.25,
+                            "greedy_bet_3x_frac": 0.45,
+                            "greedy_bet_4x_frac": 0.10,
+                            "mean_margin_best_aggressive_vs_1x": 0.18,
+                        }
+                    },
                 }
             )
             logger.log_train_val_comparison(
@@ -212,6 +232,10 @@ class TrainingLoggingTests(unittest.TestCase):
         self.assertIn("mean_q_bet_1x=+0.1200", output)
         self.assertIn("mean_q_bet_4x=-0.0800", output)
         self.assertIn("mean_margin_best_aggressive_vs_1x=-0.0900", output)
+        self.assertIn("proxy_mean=+1.350", output)
+        self.assertIn("target bet_1x:0.45 bet_2x:0.25 bet_3x:0.20 bet_4x:0.10", output)
+        self.assertIn("high      n=18", output)
+        self.assertIn("margin=+0.1800", output)
         self.assertIn("stand:0.45 hit:0.25 double:0.10 split:0.10 surrender:0.05 insurance:0.05", output)
         self.assertIn("TRAIN vs VAL", output)
         self.assertIn("EV_gap=+8.00", output)

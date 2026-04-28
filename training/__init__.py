@@ -1,4 +1,5 @@
 from .config import (
+    BettingAuxiliaryConfig,
     CheckpointConfig,
     DistillationConfig,
     DualEpsilonConfig,
@@ -36,6 +37,7 @@ from .transfer_learning import (
 
 __all__ = [
     "BlackjackRLTrainer",
+    "BettingAuxiliaryConfig",
     "CheckpointConfig",
     "DistillationConfig",
     "DualEpsilonConfig",

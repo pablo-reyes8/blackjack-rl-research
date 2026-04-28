@@ -8,7 +8,8 @@ from torch import nn
 
 from loss import compute_td_loss
 
-from .config import DistillationConfig, OptimizationConfig, TargetUpdateConfig
+from .betting_auxiliary import betting_auxiliary_weight, compute_betting_count_proxy_ce_loss
+from .config import BettingAuxiliaryConfig, DistillationConfig, OptimizationConfig, TargetUpdateConfig
 from .transfer_learning import compute_distillation_loss, distillation_weight
 
 
@@ -96,6 +97,7 @@ def train_gradient_step(
     scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
     teacher_model: nn.Module | None = None,
     distillation_config: DistillationConfig | None = None,
+    betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
     update_count: int = 0,
 ) -> dict[str, Any]:
     start_time = perf_counter()
@@ -116,6 +118,8 @@ def train_gradient_step(
     total_loss = td_loss
     distill_loss = td_loss.new_zeros(())
     lambda_distill = 0.0
+    bet_aux_loss = td_loss.new_zeros(())
+    lambda_bet_aux = 0.0
     teacher_output: dict[str, Any] | None = None
     if teacher_model is not None and distillation_config is not None and distillation_config.enabled:
         teacher_state = batch.get("teacher_state")
@@ -134,6 +138,21 @@ def train_gradient_step(
             valid_rows=batch.get("padding_mask"),
         )
         total_loss = td_loss + (distill_loss * lambda_distill)
+
+    if betting_auxiliary_config is not None and betting_auxiliary_config.enabled:
+        betting_auxiliary = batch.get("betting_auxiliary")
+        if betting_auxiliary is None:
+            raise ValueError("betting_auxiliary is required in the batch when betting auxiliary loss is enabled")
+        lambda_bet_aux = betting_auxiliary_weight(betting_auxiliary_config, update_count)
+        bet_aux_loss = compute_betting_count_proxy_ce_loss(
+            student_output=loss_info["current_output"],
+            action_mask=batch["action_mask"],
+            betting_auxiliary=betting_auxiliary,
+            config=betting_auxiliary_config,
+            betting_action_slice=online_network.bet_action_slice,
+            valid_rows=batch.get("padding_mask"),
+        )
+        total_loss = total_loss + (bet_aux_loss * lambda_bet_aux)
 
     total_loss.backward()
 
@@ -156,6 +175,8 @@ def train_gradient_step(
             "td_loss": float(td_loss.detach().item()),
             "distillation_loss": float(distill_loss.detach().item()),
             "distillation_weight": float(lambda_distill),
+            "bet_aux_loss": float(bet_aux_loss.detach().item()),
+            "bet_aux_weight": float(lambda_bet_aux),
             "total_loss": float(total_loss.detach().item()),
             "loss": float(total_loss.detach().item()),
             "grad_norm": grad_norm,
@@ -169,6 +190,7 @@ def train_gradient_step(
         "loss": total_loss,
         "td_loss": td_loss,
         "distillation_loss": distill_loss,
+        "bet_aux_loss": bet_aux_loss,
         "teacher_output": teacher_output,
         "metrics": metrics,
     }

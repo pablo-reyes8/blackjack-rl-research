@@ -20,6 +20,7 @@ from loss import BellmanLossConfig
 from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN
 from model.encoder import EncoderConfig
 from training import (
+    BettingAuxiliaryConfig,
     CheckpointConfig,
     DistillationConfig,
     DualEpsilonConfig,
@@ -207,6 +208,9 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
     target_update = TargetUpdateConfig(**_ensure_mapping(values.get("target_update"), context="training.target_update"))
     evaluation = EvaluationConfig(**_ensure_mapping(values.get("evaluation"), context="training.evaluation"))
     checkpoints = CheckpointConfig(**_ensure_mapping(values.get("checkpoints"), context="training.checkpoints"))
+    betting_auxiliary = BettingAuxiliaryConfig(
+        **_ensure_mapping(values.get("betting_auxiliary"), context="training.betting_auxiliary")
+    )
     transfer_data = _ensure_mapping(values.get("transfer"), context="training.transfer")
     distillation = DistillationConfig(
         **_ensure_mapping(transfer_data.pop("distillation", None), context="training.transfer.distillation")
@@ -223,6 +227,7 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
         target_update=target_update,
         evaluation=evaluation,
         checkpoints=checkpoints,
+        betting_auxiliary=betting_auxiliary,
         transfer=transfer,
         prints=prints,
     )

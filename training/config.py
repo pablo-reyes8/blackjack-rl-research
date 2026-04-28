@@ -179,6 +179,36 @@ class DistillationConfig:
 
 
 @dataclass(slots=True)
+class BettingAuxiliaryConfig:
+    enabled: bool = False
+    mode: str = "count_proxy_ce"
+    weight: float = 0.10
+    final_weight: float = 0.02
+    decay_steps: int = 50_000
+    threshold_2x: float = 1.0
+    threshold_3x: float = 2.0
+    threshold_4x: float = 4.0
+    min_observed_cards: int = 12
+    betting_phase_only: bool = True
+    bet_multipliers: tuple[int, ...] = (1, 2, 3, 4)
+
+    def __post_init__(self) -> None:
+        if self.mode != "count_proxy_ce":
+            raise ValueError("Only mode='count_proxy_ce' is currently supported")
+        if self.weight < 0 or self.final_weight < 0:
+            raise ValueError("weight and final_weight must be non-negative")
+        if self.decay_steps <= 0:
+            raise ValueError("decay_steps must be positive")
+        if not (self.threshold_2x <= self.threshold_3x <= self.threshold_4x):
+            raise ValueError("thresholds must satisfy threshold_2x <= threshold_3x <= threshold_4x")
+        if self.min_observed_cards < 0:
+            raise ValueError("min_observed_cards must be non-negative")
+        self.bet_multipliers = tuple(int(multiplier) for multiplier in self.bet_multipliers)
+        if self.enabled and self.bet_multipliers != (1, 2, 3, 4):
+            raise ValueError("Betting auxiliary mode currently requires bet_multipliers=(1, 2, 3, 4)")
+
+
+@dataclass(slots=True)
 class TransferLearningConfig:
     enabled: bool = False
     teacher_checkpoint_path: str | None = None
@@ -242,6 +272,7 @@ class TrainingPipelineConfig:
     target_update: TargetUpdateConfig = field(default_factory=TargetUpdateConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     checkpoints: CheckpointConfig = field(default_factory=CheckpointConfig)
+    betting_auxiliary: BettingAuxiliaryConfig = field(default_factory=BettingAuxiliaryConfig)
     transfer: TransferLearningConfig = field(default_factory=TransferLearningConfig)
     prints: PrintConfig = field(default_factory=PrintConfig)
 
@@ -252,6 +283,8 @@ class TrainingPipelineConfig:
             raise TypeError("epsilon must be an EpsilonScheduleConfig or DualEpsilonConfig instance")
         if not isinstance(self.n_step, NStepConfig):
             raise TypeError("n_step must be an NStepConfig instance")
+        if not isinstance(self.betting_auxiliary, BettingAuxiliaryConfig):
+            raise TypeError("betting_auxiliary must be a BettingAuxiliaryConfig instance")
         if not isinstance(self.transfer, TransferLearningConfig):
             raise TypeError("transfer must be a TransferLearningConfig instance")
 
@@ -263,6 +296,7 @@ class TrainingPipelineConfig:
         trainer_config["loss"] = BellmanLossConfig(phase_weights=phase_weights, **loss_config)
 
         epsilon_config = data.get("epsilon", {})
+        betting_auxiliary_config = BettingAuxiliaryConfig(**data.get("betting_auxiliary", {}))
         transfer_config = dict(data.get("transfer", {}))
         distillation_config = DistillationConfig(**transfer_config.pop("distillation", {}))
         return cls(
@@ -277,6 +311,7 @@ class TrainingPipelineConfig:
             target_update=TargetUpdateConfig(**data.get("target_update", {})),
             evaluation=EvaluationConfig(**data.get("evaluation", {})),
             checkpoints=CheckpointConfig(**data.get("checkpoints", {})),
+            betting_auxiliary=betting_auxiliary_config,
             transfer=TransferLearningConfig(distillation=distillation_config, **transfer_config),
             prints=PrintConfig(**data.get("prints", {})),
         )
