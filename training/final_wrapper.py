@@ -398,6 +398,7 @@ def run_blackjack_transfer_stage(
     betting_auxiliary_threshold_4x: float = 4.0,
     betting_auxiliary_min_observed_cards: int = 12,
     betting_auxiliary_betting_phase_only: bool = True,
+    betting_auxiliary_class_weights: tuple[float, float, float, float] | None = None,
 
     # Epsilon
     betting_epsilon_start: float = 0.20,
@@ -747,6 +748,7 @@ def run_blackjack_transfer_stage(
         min_observed_cards=betting_auxiliary_min_observed_cards,
         betting_phase_only=betting_auxiliary_betting_phase_only,
         bet_multipliers=resolved_bet_multipliers,
+        class_weights=betting_auxiliary_class_weights,
     )
 
     print_config = PrintConfig(

@@ -75,6 +75,49 @@ class BettingAuxiliaryTests(unittest.TestCase):
 
         self.assertGreater(float(loss.item()), 0.0)
 
+    def test_compute_betting_count_proxy_ce_loss_supports_class_weights(self) -> None:
+        student_output = {
+            "q_values": torch.tensor(
+                [
+                    [2.0, 0.0, 0.0, 0.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0],
+                    [0.0, 0.0, 0.0, 2.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0],
+                ],
+                dtype=torch.float32,
+            )
+        }
+        action_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+                [1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+            ],
+            dtype=torch.bool,
+        )
+        auxiliary = {
+            "true_count_proxy": torch.tensor([0.0, 5.0], dtype=torch.float32),
+            "observed_cards": torch.tensor([20, 20], dtype=torch.long),
+        }
+
+        unweighted = compute_betting_count_proxy_ce_loss(
+            student_output=student_output,
+            action_mask=action_mask,
+            betting_auxiliary=auxiliary,
+            config=BettingAuxiliaryConfig(enabled=True, min_observed_cards=12, class_weights=None),
+            betting_action_slice=slice(0, 4),
+        )
+        weighted = compute_betting_count_proxy_ce_loss(
+            student_output=student_output,
+            action_mask=action_mask,
+            betting_auxiliary=auxiliary,
+            config=BettingAuxiliaryConfig(
+                enabled=True,
+                min_observed_cards=12,
+                class_weights=(0.25, 1.0, 1.5, 2.0),
+            ),
+            betting_action_slice=slice(0, 4),
+        )
+
+        self.assertNotEqual(float(weighted.item()), float(unweighted.item()))
+
     def test_feedforward_replay_buffer_samples_betting_auxiliary(self) -> None:
         buffer = FeedForwardReplayBuffer(ReplayBufferConfig(capacity=16, batch_size=2, warmup_size=0))
         for index in range(2):
@@ -141,6 +184,24 @@ class BettingAuxiliaryTests(unittest.TestCase):
 
         self.assertTrue(result["pipeline_config"].betting_auxiliary.enabled)
         self.assertEqual(result["pipeline_config"].betting_auxiliary.bet_multipliers, (1, 2, 3, 4))
+
+    def test_run_blackjack_stage_accepts_auxiliary_class_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = run_blackjack_stage(
+                stage_name="weighted_aux_mode",
+                output_root=Path(tmp_dir),
+                run_training=False,
+                enable_prints=False,
+                include_observed_history=True,
+                bet_multipliers=(1, 2, 3, 4),
+                axu_loss_bet=True,
+                betting_auxiliary_class_weights=(0.25, 1.0, 1.5, 2.0),
+            )
+
+        self.assertEqual(
+            result["pipeline_config"].betting_auxiliary.class_weights,
+            (0.25, 1.0, 1.5, 2.0),
+        )
 
 
 if __name__ == "__main__":

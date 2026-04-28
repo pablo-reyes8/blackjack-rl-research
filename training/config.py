@@ -191,6 +191,7 @@ class BettingAuxiliaryConfig:
     min_observed_cards: int = 12
     betting_phase_only: bool = True
     bet_multipliers: tuple[int, ...] = (1, 2, 3, 4)
+    class_weights: tuple[float, float, float, float] | None = None
 
     def __post_init__(self) -> None:
         if self.mode != "count_proxy_ce":
@@ -204,6 +205,12 @@ class BettingAuxiliaryConfig:
         if self.min_observed_cards < 0:
             raise ValueError("min_observed_cards must be non-negative")
         self.bet_multipliers = tuple(int(multiplier) for multiplier in self.bet_multipliers)
+        if self.class_weights is not None:
+            self.class_weights = tuple(float(weight) for weight in self.class_weights)
+            if len(self.class_weights) != 4:
+                raise ValueError("class_weights must have length 4: bet_1x, bet_2x, bet_3x, bet_4x")
+            if any(weight < 0 for weight in self.class_weights):
+                raise ValueError("class_weights must be non-negative")
         if self.enabled and self.bet_multipliers != (1, 2, 3, 4):
             raise ValueError("Betting auxiliary mode currently requires bet_multipliers=(1, 2, 3, 4)")
 

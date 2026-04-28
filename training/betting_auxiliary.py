@@ -234,7 +234,14 @@ def compute_betting_count_proxy_ce_loss(
         return q_values.new_zeros(())
 
     masked_bet_q = apply_action_mask(bet_q_values, bet_mask)
-    return F.cross_entropy(masked_bet_q[valid], target[valid])
+    class_weight_tensor = None
+    if config.class_weights is not None:
+        class_weight_tensor = torch.tensor(
+            config.class_weights,
+            dtype=masked_bet_q.dtype,
+            device=masked_bet_q.device,
+        )
+    return F.cross_entropy(masked_bet_q[valid], target[valid], weight=class_weight_tensor)
 
 
 def count_proxy_bucket_name(true_count_proxy: float, config: BettingAuxiliaryConfig) -> str:
