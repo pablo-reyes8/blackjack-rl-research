@@ -45,6 +45,28 @@ class TrainingLogger:
             return "n/a"
         return " ".join(f"{action}:{float(values.get(action, 0.0)):+.1f}" for action in BET_ACTION_ORDER)
 
+    def _has_multiple_bet_multipliers(self, metrics: dict[str, Any]) -> bool:
+        multipliers = metrics.get("available_bet_multipliers")
+        if isinstance(multipliers, (list, tuple, set)):
+            return len(multipliers) > 1
+        return False
+
+    def _format_bet_q_diagnostics(self, metrics: dict[str, Any]) -> list[str]:
+        if not self._has_multiple_bet_multipliers(metrics):
+            return []
+
+        lines: list[str] = ["  Bet Q   :"]
+        for action_name in BET_ACTION_ORDER:
+            value = metrics.get(f"mean_q_{action_name}")
+            label = action_name.replace("bet_", "mean_q_bet_")
+            rendered = f"{float(value):+.4f}" if isinstance(value, (int, float)) else "n/a"
+            lines.append(f"           {label}={rendered}")
+        lines.append(
+            "           "
+            f"mean_margin_best_aggressive_vs_1x={float(metrics.get('mean_margin_best_aggressive_vs_1x', 0.0)):+.4f}"
+        )
+        return lines
+
     def log_warmup(self, *, buffer_size: int, target_size: int, force: bool = False) -> None:
         if not self.config.enable:
             return
@@ -204,23 +226,29 @@ class TrainingLogger:
     def log_evaluation(self, *, metrics: dict[str, Any]) -> None:
         if not self.config.enable or not self.config.print_eval_summary:
             return
-        self._print_block(
-            "VAL",
+        lines = [
+            "  Reward  : "
+            f"reward/round={metrics.get('reward_per_round', 0.0):.4f} | EV/1000={metrics.get('ev_per_1000_hands', 0.0):.2f} | round_std={metrics.get('round_reward_std', 0.0):.4f}",
+            "  Outcomes: "
+            f"win={metrics.get('win_rate', 0.0):.4f} | push={metrics.get('push_rate', 0.0):.4f} | loss={metrics.get('loss_rate', 0.0):.4f} | "
+            f"blackjack={metrics.get('blackjack_rate', 0.0):.4f} | bust={metrics.get('bust_rate', 0.0):.4f}",
+            "  Betting : "
+            f"1x_frac={metrics.get('conservative_bet_fraction', 0.0):.3f} | agg_frac={metrics.get('aggressive_bet_fraction', 0.0):.3f} | "
+            f"bet_random={metrics.get('random_action_fraction_betting', 0.0):.3f}",
+            "           " + self._format_action_distribution(metrics, 'bet_action_frequencies', BET_ACTION_ORDER),
+            "           bet_EV " + self._format_bet_ev(metrics),
+        ]
+        lines.extend(self._format_bet_q_diagnostics(metrics))
+        lines.extend(
             [
-                "  Reward  : "
-                f"reward/round={metrics.get('reward_per_round', 0.0):.4f} | EV/1000={metrics.get('ev_per_1000_hands', 0.0):.2f} | round_std={metrics.get('round_reward_std', 0.0):.4f}",
-                "  Outcomes: "
-                f"win={metrics.get('win_rate', 0.0):.4f} | push={metrics.get('push_rate', 0.0):.4f} | loss={metrics.get('loss_rate', 0.0):.4f} | "
-                f"blackjack={metrics.get('blackjack_rate', 0.0):.4f} | bust={metrics.get('bust_rate', 0.0):.4f}",
-                "  Betting : "
-                f"1x_frac={metrics.get('conservative_bet_fraction', 0.0):.3f} | agg_frac={metrics.get('aggressive_bet_fraction', 0.0):.3f} | "
-                f"bet_random={metrics.get('random_action_fraction_betting', 0.0):.3f}",
-                "           " + self._format_action_distribution(metrics, 'bet_action_frequencies', BET_ACTION_ORDER),
-                "           bet_EV " + self._format_bet_ev(metrics),
                 "  Playing : "
                 f"play_random={metrics.get('random_action_fraction_playing', 0.0):.3f} | insurance_reward={metrics.get('insurance_reward_total', 0.0):.4f}",
                 "           " + self._format_action_distribution(metrics, 'play_action_frequencies', PLAYING_ACTION_ORDER),
-            ],
+            ]
+        )
+        self._print_block(
+            "VAL",
+            lines,
             strong=True,
         )
 

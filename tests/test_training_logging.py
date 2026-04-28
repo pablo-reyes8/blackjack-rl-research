@@ -159,9 +159,15 @@ class TrainingLoggingTests(unittest.TestCase):
                     "conservative_bet_fraction": 0.60,
                     "aggressive_bet_fraction": 0.20,
                     "insurance_reward_total": 1.5,
+                    "available_bet_multipliers": [1, 2, 3, 4],
                     "bet_action_frequencies": {"bet_1x": 0.6, "bet_2x": 0.2, "bet_3x": 0.1, "bet_4x": 0.1},
                     "play_action_frequencies": {"stand": 0.45, "hit": 0.25, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
                     "bet_ev_per_1000_rounds_by_action": {"bet_1x": 15.0, "bet_2x": 30.0, "bet_3x": 5.0, "bet_4x": -10.0},
+                    "mean_q_bet_1x": 0.12,
+                    "mean_q_bet_2x": 0.03,
+                    "mean_q_bet_3x": -0.04,
+                    "mean_q_bet_4x": -0.08,
+                    "mean_margin_best_aggressive_vs_1x": -0.09,
                 }
             )
             logger.log_train_val_comparison(
@@ -203,11 +209,46 @@ class TrainingLoggingTests(unittest.TestCase):
         self.assertIn("bet_1x:0.50 bet_2x:0.30 bet_3x:0.10 bet_4x:0.10", output)
         self.assertIn("VAL", output)
         self.assertIn("blackjack=0.0400 | bust=0.1500", output)
+        self.assertIn("mean_q_bet_1x=+0.1200", output)
+        self.assertIn("mean_q_bet_4x=-0.0800", output)
+        self.assertIn("mean_margin_best_aggressive_vs_1x=-0.0900", output)
         self.assertIn("stand:0.45 hit:0.25 double:0.10 split:0.10 surrender:0.05 insurance:0.05", output)
         self.assertIn("TRAIN vs VAL", output)
         self.assertIn("EV_gap=+8.00", output)
         self.assertIn("Best saved to checkpoints/best_eval.pt (ev_per_1000_hands 20.0000)", output)
         self.assertIn("Epoch time: 1.50 min", output)
+
+    def test_logger_hides_bet_q_diagnostics_when_single_bet_multiplier(self) -> None:
+        logger = TrainingLogger(PrintConfig(enable=True))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            logger.log_evaluation(
+                metrics={
+                    "reward_per_round": 0.01,
+                    "ev_per_1000_hands": 5.0,
+                    "round_reward_std": 1.0,
+                    "win_rate": 0.4,
+                    "push_rate": 0.1,
+                    "loss_rate": 0.5,
+                    "blackjack_rate": 0.03,
+                    "bust_rate": 0.15,
+                    "random_action_fraction_betting": 0.0,
+                    "random_action_fraction_playing": 0.0,
+                    "conservative_bet_fraction": 1.0,
+                    "aggressive_bet_fraction": 0.0,
+                    "insurance_reward_total": 0.0,
+                    "available_bet_multipliers": [1],
+                    "bet_action_frequencies": {"bet_1x": 1.0, "bet_2x": 0.0, "bet_3x": 0.0, "bet_4x": 0.0},
+                    "play_action_frequencies": {"stand": 0.5, "hit": 0.3, "double": 0.1, "split": 0.05, "surrender": 0.05, "insurance": 0.0},
+                    "bet_ev_per_1000_rounds_by_action": {"bet_1x": 5.0, "bet_2x": 0.0, "bet_3x": 0.0, "bet_4x": 0.0},
+                    "mean_q_bet_1x": 0.2,
+                    "mean_margin_best_aggressive_vs_1x": 0.0,
+                }
+            )
+
+        output = buffer.getvalue()
+        self.assertNotIn("mean_q_bet_1x", output)
+        self.assertNotIn("mean_margin_best_aggressive_vs_1x", output)
 
 
 if __name__ == "__main__":

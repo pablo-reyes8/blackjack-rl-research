@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import random
+from collections import defaultdict
 from typing import Any
 
 import torch
 
-from enviroment_bj.core import ACTION_ORDER
+from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER
 
 from .metrics import BehaviorMetricsTracker
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
@@ -34,6 +35,14 @@ def evaluate_policy(
     env_states = [EvaluationEnvState(env=env) for env in envs]
     is_recurrent = model.config.architecture != "feedforward"
     decisions = 0
+    bet_q_totals: dict[str, float] = defaultdict(float)
+    bet_q_counts: dict[str, int] = defaultdict(int)
+    best_aggressive_margin_total = 0.0
+    best_aggressive_margin_count = 0
+    available_bet_multipliers = tuple(
+        int(multiplier)
+        for multiplier in getattr(getattr(envs[0], "config", None), "bet_multipliers", ())
+    ) if envs else ()
 
     with torch.no_grad():
         while tracker.total_rounds < num_rounds and decisions < max_decisions:
@@ -52,14 +61,34 @@ def evaluate_policy(
                     model_output = model.forward_step(env_state.response, hidden_state=env_state.hidden_state)
                     env_state.hidden_state = model_output["hidden_state"]
                     action_mask = model_output["action_mask"].squeeze(0)
+                    q_values = model_output["q_values"].squeeze(0)
                     masked_q_values = model_output["masked_q_values"].squeeze(0)
                 else:
                     model_output = model(env_state.response)
                     action_mask = model_output["action_mask"].squeeze(0)
+                    q_values = model_output["q_values"].squeeze(0)
                     masked_q_values = model_output["masked_q_values"].squeeze(0)
 
                 decision_phase = infer_decision_phase(env_state.response)
                 epsilon_value = resolve_epsilon_value(epsilon, decision_phase=decision_phase, evaluation=True)
+
+                if decision_phase == "betting":
+                    best_aggressive_q: float | None = None
+                    q_bet_1x: float | None = None
+                    for bet_index, action_name in enumerate(BET_ACTION_ORDER):
+                        if not bool(action_mask[bet_index].item()):
+                            continue
+                        q_value = float(q_values[bet_index].item())
+                        bet_q_totals[action_name] += q_value
+                        bet_q_counts[action_name] += 1
+                        if action_name == "bet_1x":
+                            q_bet_1x = q_value
+                        elif action_name in {"bet_2x", "bet_3x", "bet_4x"}:
+                            if best_aggressive_q is None or q_value > best_aggressive_q:
+                                best_aggressive_q = q_value
+                    if q_bet_1x is not None and best_aggressive_q is not None:
+                        best_aggressive_margin_total += best_aggressive_q - q_bet_1x
+                        best_aggressive_margin_count += 1
 
                 action_index, was_random = select_epsilon_greedy_action(
                     masked_q_values=masked_q_values,
@@ -95,5 +124,21 @@ def evaluate_policy(
                     env_state.response = next_response
 
     summary = tracker.summary()
-    summary.update({"evaluation_decisions": float(decisions)})
+    summary.update(
+        {
+            "evaluation_decisions": float(decisions),
+            "available_bet_multipliers": list(available_bet_multipliers),
+            "mean_margin_best_aggressive_vs_1x": (
+                best_aggressive_margin_total / best_aggressive_margin_count
+                if best_aggressive_margin_count > 0
+                else 0.0
+            ),
+        }
+    )
+    for action_name in BET_ACTION_ORDER:
+        summary[f"mean_q_{action_name}"] = (
+            bet_q_totals[action_name] / bet_q_counts[action_name]
+            if bet_q_counts[action_name] > 0
+            else None
+        )
     return summary
