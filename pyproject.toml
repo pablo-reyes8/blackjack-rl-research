@@ -39,11 +39,13 @@ dev = [
 blackjack-train = "blackjack_rl_cli.train:main"
 blackjack-evaluate = "blackjack_rl_cli.evaluate:main"
 blackjack-describe = "blackjack_rl_cli.describe_setup:main"
+blackjack-infer = "blackjack_rl_cli.infer:main"
+blackjack-compare-models = "blackjack_rl_cli.infer:main"
 
 [tool.setuptools]
 include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["blackjack_rl_cli*", "enviroment_bj*", "loss*", "model*", "training*"]
+include = ["blackjack_rl_cli*", "enviroment_bj*", "inference*", "loss*", "model*", "training*"]
 exclude = ["tests*", "notebooks*", "change_logs*"]

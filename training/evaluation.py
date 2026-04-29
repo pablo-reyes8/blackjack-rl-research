@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import random
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
 import torch
 
@@ -32,6 +32,8 @@ def evaluate_policy(
     rng: random.Random,
     reset_hidden_on_round_end: bool,
     betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
+    progress_every_n_rounds: int | None = None,
+    progress_callback: Callable[[dict[str, Any], int, int], None] | None = None,
 ) -> dict[str, Any]:
     model.eval()
     tracker = BehaviorMetricsTracker()
@@ -51,6 +53,34 @@ def evaluate_policy(
         int(multiplier)
         for multiplier in getattr(getattr(envs[0], "config", None), "bet_multipliers", ())
     ) if envs else ()
+    next_progress_round = (
+        int(progress_every_n_rounds)
+        if progress_every_n_rounds is not None and int(progress_every_n_rounds) > 0
+        else None
+    )
+
+    def build_summary() -> dict[str, Any]:
+        summary = tracker.summary()
+        summary.update(
+            {
+                "evaluation_decisions": float(decisions),
+                "available_bet_multipliers": list(available_bet_multipliers),
+                "mean_margin_best_aggressive_vs_1x": (
+                    best_aggressive_margin_total / best_aggressive_margin_count
+                    if best_aggressive_margin_count > 0
+                    else 0.0
+                ),
+            }
+        )
+        for action_name in BET_ACTION_ORDER:
+            summary[f"mean_q_{action_name}"] = (
+                bet_q_totals[action_name] / bet_q_counts[action_name]
+                if bet_q_counts[action_name] > 0
+                else None
+            )
+        if betting_auxiliary_tracker is not None:
+            summary.update(betting_auxiliary_tracker.summary())
+        return summary
 
     with torch.no_grad():
         while tracker.total_rounds < num_rounds and decisions < max_decisions:
@@ -136,30 +166,19 @@ def evaluate_policy(
                 decisions += 1
 
                 if next_response["done"]:
+                    current_rounds = int(tracker.total_rounds)
+                    if (
+                        progress_callback is not None
+                        and next_progress_round is not None
+                        and current_rounds >= next_progress_round
+                    ):
+                        progress_callback(build_summary(), current_rounds, decisions)
+                        while next_progress_round is not None and current_rounds >= next_progress_round:
+                            next_progress_round += int(progress_every_n_rounds or 0)
                     env_state.response = None
                     if is_recurrent and reset_hidden_on_round_end:
                         env_state.hidden_state = model.init_hidden(batch_size=1)
                 else:
                     env_state.response = next_response
 
-    summary = tracker.summary()
-    summary.update(
-        {
-            "evaluation_decisions": float(decisions),
-            "available_bet_multipliers": list(available_bet_multipliers),
-            "mean_margin_best_aggressive_vs_1x": (
-                best_aggressive_margin_total / best_aggressive_margin_count
-                if best_aggressive_margin_count > 0
-                else 0.0
-            ),
-        }
-    )
-    for action_name in BET_ACTION_ORDER:
-        summary[f"mean_q_{action_name}"] = (
-            bet_q_totals[action_name] / bet_q_counts[action_name]
-            if bet_q_counts[action_name] > 0
-            else None
-        )
-    if betting_auxiliary_tracker is not None:
-        summary.update(betting_auxiliary_tracker.summary())
-    return summary
+    return build_summary()

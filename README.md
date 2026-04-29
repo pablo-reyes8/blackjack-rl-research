@@ -9,7 +9,7 @@
 
 <br>
 
-**A pure-PyTorch research environment designed to push Blackjack beyond a toy problem.** *This project models Blackjack as a rigorous Partially Observable Markov Decision Process (POMDP), featuring dynamic bet-sizing, hidden shoe states, recurrent agents, and fully transparent, reproducible experiment pipelines.*
+**A pure-PyTorch research environment designed to push Blackjack beyond a toy problem.** *This project models Blackjack as a rigorous Partially Observable Markov Decision Process (POMDP), featuring dynamic bet-sizing, hidden shoe states, staged training, transfer learning with distillation, and fully transparent, reproducible experiment pipelines.*
 
 </div>
 
@@ -52,7 +52,9 @@ The stack is intentionally built from the ground up—bypassing high-level abstr
 - **Advanced Table Dynamics:** Supports realistic casino constraints including split depth limits, doubles, surrender, insurance, multi-deck shoes, dealer peek behavior, cut-card reshuffle logic, and optional six-card charlie.
 - **Observation as a Research Surface:** Seamlessly switch between compact basic-strategy-style inputs and simulator-level, fully observable states.
 - **Sophisticated Agent Architectures:** Out-of-the-box support for feedforward, recurrent, and dueling recurrent Double DQN agents, utilizing separate betting and playing heads over a shared representational trunk.
-- **Robust Training Pipeline:** Features dual epsilon scheduling by phase, replay buffers, optional n-step returns, phase-weighted loss, target-network updates, and strict checkpoint management.
+- **Robust Training Pipeline:** Features dual epsilon scheduling by phase, replay buffers, optional n-step returns, phase-weighted loss, target-network updates, strict checkpoint management, and auxiliary betting losses.
+- **Stage-Based Optimization:** The high-level wrapper supports progressive multi-stage training, warm starts, checkpoint reuse, and controlled transitions from playing-focused stages into betting-focused stages.
+- **Transfer Learning & Distillation:** The project supports warm-start initialization plus teacher-student distillation to preserve strong playing behavior while adapting new capabilities such as betting.
 - **Production-Ready Hygiene:** Packaged for a clean first public push: `README`, `pyproject.toml`, Docker, GitHub Actions, YAML presets, requirements files, scripts, license, and repo hygiene files.
 
 ---
@@ -60,6 +62,20 @@ The stack is intentionally built from the ground up—bypassing high-level abstr
 ## Current status & Capabilities
 
 The core blackjack environment is fully implemented, bypassing standard abstractions to natively model the game as a two-stage decision process: **Betting** (`1x`, `2x`, `3x`, `4x`) and **Playing** (`stand`, `hit`, `double`, `split`, `surrender`, `insurance`). 
+
+The current codebase already supports iterative training workflows where the agent is first stabilized on playing behavior and then upgraded through staged transfer runs. The retained checkpoints under `outputs/models/` reflect that progression:
+
+- `KEEP_01A_*` and `KEEP_02A_*`: early realistic-history feedforward stages.
+- `KEEP_02C_*`: addition of richer temporal context.
+- `KEEP_03A_*`, `KEEP_03B_*`, `KEEP_03C_*`: increasingly harder `unknown_progress` stages used to consolidate partial-observation play.
+- `KEEP_04C_*`: betting-focused stage built on top of the previous playing foundation.
+
+In practical terms, the agent has already learned a solid playing policy under realistic partial observability. The main active research area is no longer "can it play Blackjack at all?" but rather "how to make the betting head exploit favorable states more reliably without damaging playing quality."
+
+**📈 Current project status**
+- **Playing policy:** already strong and stable enough to be reused as a source policy for later stages.
+- **Training workflow:** supports curriculum-like staged runs, warm starts, resume, checkpoint comparison, and teacher-guided transfer.
+- **Betting research:** currently being improved with dedicated betting diagnostics, auxiliary betting objectives, and evaluation-by-bucket tooling.
 
 **🃏 Environment & Rule Engine**
 * **Shoe Dynamics:** Multi-deck shoes, hidden progress starts, reshuffle tracking, cut-card mode, and realistic reset-to-betting flows.
@@ -72,8 +88,9 @@ The core blackjack environment is fully implemented, bypassing standard abstract
 
 **⚡ Training Pipeline**
 * **Phase-Aware Optimization:** Separate betting/playing heads, module gating, and dual epsilon exploration schedules.
-* **Loss & Replay:** Standard Double DQN targets, optional $n$-step returns, phase-weighted TD loss, and temporal replay buffers.
-* **Reproducibility:** Driven by YAML presets, strict checkpointing, and dedicated CLI workflows (`describe`, `train`, `evaluate`).
+* **Loss & Replay:** Standard Double DQN targets, optional $n$-step returns, phase-weighted TD loss, temporal replay buffers, and optional betting auxiliary losses.
+* **Transfer & Distillation:** Warm-start loading, teacher checkpoints, and stage-specific distillation to protect previously learned playing behavior.
+* **Reproducibility:** Driven by YAML presets, strict checkpointing, stage-aware wrappers, and dedicated CLI workflows (`describe`, `train`, `evaluate`).
 
 ---
 
@@ -153,7 +170,9 @@ This preset is intentionally small and is used by CI as a fast end-to-end valida
 Training output is phase-aware now. During a run the trainer prints, in a compact format:
 - betting epsilon and playing epsilon
 - loss and TD error split by phase
+- distillation loss and auxiliary betting loss when enabled
 - betting action frequencies and bet EV-style summaries
+- mean Q-values for betting actions and aggressive-vs-conservative betting margins
 - playing action frequencies
 - total reward and EV summaries for train and evaluation
 
@@ -351,7 +370,7 @@ Each experiment can define:
 - `start_state`: how episodes start, including hidden burned rounds
 - `environment`: full blackjack rules and observation profile
 - `model`: agent architecture and network hyperparameters
-- `training`: replay buffer, optimization, dual epsilon schedule, evaluation, checkpointing, and print settings
+- `training`: replay buffer, optimization, dual epsilon schedule, evaluation, checkpointing, distillation, betting auxiliary losses, and print settings
 
 The config loader supports inheritance through `extends`, so presets can share a common base while overriding only what changes.
 
@@ -404,8 +423,6 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 
 ## Limitations and next steps
 
-## Limitations and next steps
-
 **What is already strong:**
 - High-fidelity blackjack environment with broad rule configurability
 - Realistic partial-observation setups, including unknown shoe progress
@@ -413,12 +430,14 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 - Explicit two-phase decision modeling: bet sizing and hand play
 - Recurrent Double/Dueling DQN pipeline with phase-aware exploration
 - Phase-aware loss weighting for betting vs. playing
+- Stage-based training workflow with warm start and resume support
+- Teacher-student distillation to preserve and transfer playing behavior across stages
 - Optional phase adapters and module gating in the network
 - N-step training support
 - Resume-from-checkpoint workflow for iterative training
 - Support for exogenous visible-card events, including both training heuristics and future manual injection from a visual scraper
 - Reproducible preset-driven workflows and checkpointed experimentation
-- Expanded monitoring with train/validation behavior gaps and richer betting/playing diagnostics
+- Expanded monitoring with train/validation behavior gaps, richer betting/playing diagnostics, betting Q-value summaries, and count-proxy betting analysis
 
 **What is still missing or intentionally left lightweight:**
 - No published benchmark table yet across standard blackjack settings or ablations
