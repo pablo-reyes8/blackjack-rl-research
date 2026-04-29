@@ -1,6 +1,7 @@
 from .config import (
     BettingAuxiliaryConfig,
     CheckpointConfig,
+    CountAuxiliaryConfig,
     DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
@@ -39,6 +40,7 @@ __all__ = [
     "BlackjackRLTrainer",
     "BettingAuxiliaryConfig",
     "CheckpointConfig",
+    "CountAuxiliaryConfig",
     "DistillationConfig",
     "DualEpsilonConfig",
     "EpsilonScheduleConfig",

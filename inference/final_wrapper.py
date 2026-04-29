@@ -49,6 +49,9 @@ def _resolve_model_and_encoder_args(payload: Mapping[str, Any]) -> dict[str, Any
         "advantage_hidden_dim": int(model_config.get("advantage_hidden_dim", 128)),
         "use_phase_adapters": bool(model_config.get("use_phase_adapters", False)),
         "use_module_gating": bool(model_config.get("use_module_gating", False)),
+        "use_count_auxiliary_head": bool(model_config.get("use_count_auxiliary_head", False)),
+        "count_auxiliary_hidden_dim": int(model_config.get("count_auxiliary_hidden_dim", 128)),
+        "count_auxiliary_num_buckets": int(model_config.get("count_auxiliary_num_buckets", 4)),
         "observation_profile": encoder_config.get("profile", "table_realistic_unknown_progress"),
         "encoder_profile": encoder_config.get("profile", "table_realistic_unknown_progress"),
         "include_observed_history": bool(encoder_config.get("encode_observed_history", False)),
@@ -103,6 +106,7 @@ def _model_config_for_logging(model_and_encoder_args: Mapping[str, Any]) -> dict
         "use_layer_norm": model_and_encoder_args.get("use_layer_norm", False),
         "use_phase_adapters": model_and_encoder_args.get("use_phase_adapters", False),
         "use_module_gating": model_and_encoder_args.get("use_module_gating", False),
+        "use_count_auxiliary_head": model_and_encoder_args.get("use_count_auxiliary_head", False),
         "encoder": {
             "profile": model_and_encoder_args.get("encoder_profile"),
         },
@@ -358,6 +362,26 @@ def _resolve_betting_auxiliary_args(
     }
 
 
+def _resolve_count_auxiliary_args(payload: Mapping[str, Any]) -> dict[str, Any]:
+    count_auxiliary_config = deepcopy(dict((payload.get("pipeline_config") or {}).get("count_auxiliary") or {}))
+    return {
+        "count_auxiliary_enabled": bool(count_auxiliary_config.get("enabled", False)),
+        "count_auxiliary_mode": count_auxiliary_config.get("mode", "bucket_ce"),
+        "count_auxiliary_weight": 0.0,
+        "count_auxiliary_final_weight": 0.0,
+        "count_auxiliary_decay_steps": int(count_auxiliary_config.get("decay_steps", 50_000)),
+        "count_auxiliary_threshold_medium": float(count_auxiliary_config.get("threshold_medium", 1.0)),
+        "count_auxiliary_threshold_high": float(count_auxiliary_config.get("threshold_high", 2.0)),
+        "count_auxiliary_threshold_very_high": float(count_auxiliary_config.get("threshold_very_high", 4.0)),
+        "count_auxiliary_min_observed_cards": int(count_auxiliary_config.get("min_observed_cards", 20)),
+        "count_auxiliary_class_weights": (
+            tuple(float(weight) for weight in count_auxiliary_config.get("class_weights"))
+            if count_auxiliary_config.get("class_weights") is not None
+            else None
+        ),
+    }
+
+
 def load_checkpoint_weights_for_eval(
     model: torch.nn.Module,
     checkpoint_path: str | Path,
@@ -507,6 +531,7 @@ def evaluate_blackjack_checkpoint(
         betting_auxiliary_min_observed_cards=betting_auxiliary_min_observed_cards,
         betting_auxiliary_class_weights=betting_auxiliary_class_weights,
     )
+    count_auxiliary_args = _resolve_count_auxiliary_args(payload)
     model_and_encoder_args = _resolve_model_and_encoder_args_for_checkpoint(
         payload,
         output_root=output_root,
@@ -573,6 +598,7 @@ def evaluate_blackjack_checkpoint(
             start_state_overrides=start_state_overrides,
             **model_and_encoder_args,
             **betting_auxiliary_args,
+            **count_auxiliary_args,
         )
 
     logger = InferenceLogger(enable=print_summary)
@@ -601,6 +627,7 @@ def evaluate_blackjack_checkpoint(
         rng=random.Random(base_seed),
         reset_hidden_on_round_end=pipeline_config.trainer.reset_hidden_on_round_end,
         betting_auxiliary_config=pipeline_config.betting_auxiliary,
+        count_auxiliary_config=pipeline_config.count_auxiliary,
         progress_every_n_rounds=progress_every_n_rounds,
         progress_callback=(
             (

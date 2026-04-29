@@ -104,7 +104,7 @@ class BlackjackRLTrainer:
             teacher_state = encode_teacher_state(self.teacher_model, response)
             output["teacher_state_vector"] = teacher_state["state_vector"]
             output["teacher_action_mask"] = teacher_state["action_mask"]
-        if self.pipeline_config.betting_auxiliary.enabled:
+        if self.pipeline_config.betting_auxiliary.enabled or self.pipeline_config.count_auxiliary.enabled:
             n_decks = getattr(getattr(env, "config", None), "n_decks", 8)
             auxiliary = compute_observed_hi_lo_proxy_from_response(response, n_decks=int(n_decks))
             output["betting_auxiliary"] = {
@@ -288,6 +288,11 @@ class BlackjackRLTrainer:
             "betting_auxiliary_weight": self.pipeline_config.betting_auxiliary.weight,
             "betting_auxiliary_final_weight": self.pipeline_config.betting_auxiliary.final_weight,
             "betting_auxiliary_min_observed_cards": self.pipeline_config.betting_auxiliary.min_observed_cards,
+            "count_auxiliary_enabled": self.pipeline_config.count_auxiliary.enabled,
+            "count_auxiliary_mode": self.pipeline_config.count_auxiliary.mode,
+            "count_auxiliary_weight": self.pipeline_config.count_auxiliary.weight,
+            "count_auxiliary_final_weight": self.pipeline_config.count_auxiliary.final_weight,
+            "count_auxiliary_min_observed_cards": self.pipeline_config.count_auxiliary.min_observed_cards,
             "n_decks": reference_env.config.n_decks,
             "shoe_penetration": reference_env.config.shoe_penetration,
             "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
@@ -476,6 +481,7 @@ class BlackjackRLTrainer:
             teacher_model=self.teacher_model,
             distillation_config=self.pipeline_config.transfer.distillation,
             betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
+            count_auxiliary_config=self.pipeline_config.count_auxiliary,
             update_count=self.update_count,
         )
         self.update_count += 1
@@ -511,6 +517,7 @@ class BlackjackRLTrainer:
             rng=random.Random(self.pipeline_config.trainer.seed + self.epoch_index),
             reset_hidden_on_round_end=self.pipeline_config.trainer.reset_hidden_on_round_end,
             betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
+            count_auxiliary_config=self.pipeline_config.count_auxiliary,
         )
 
     def train_one_epoch(self) -> dict[str, Any]:

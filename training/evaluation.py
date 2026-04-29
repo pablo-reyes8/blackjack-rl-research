@@ -10,7 +10,8 @@ import torch
 from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER
 
 from .betting_auxiliary import BettingAuxiliaryEvaluationTracker, compute_observed_hi_lo_proxy_from_response
-from .config import BettingAuxiliaryConfig
+from .config import BettingAuxiliaryConfig, CountAuxiliaryConfig
+from .count_auxiliary import CountAuxiliaryEvaluationTracker
 from .metrics import BehaviorMetricsTracker
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
 
@@ -32,6 +33,7 @@ def evaluate_policy(
     rng: random.Random,
     reset_hidden_on_round_end: bool,
     betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
+    count_auxiliary_config: CountAuxiliaryConfig | None = None,
     progress_every_n_rounds: int | None = None,
     progress_callback: Callable[[dict[str, Any], int, int], None] | None = None,
 ) -> dict[str, Any]:
@@ -47,6 +49,11 @@ def evaluate_policy(
     betting_auxiliary_tracker = (
         BettingAuxiliaryEvaluationTracker()
         if betting_auxiliary_config is not None and betting_auxiliary_config.enabled
+        else None
+    )
+    count_auxiliary_tracker = (
+        CountAuxiliaryEvaluationTracker()
+        if count_auxiliary_config is not None and count_auxiliary_config.enabled
         else None
     )
     available_bet_multipliers = tuple(
@@ -80,6 +87,8 @@ def evaluate_policy(
             )
         if betting_auxiliary_tracker is not None:
             summary.update(betting_auxiliary_tracker.summary())
+        if count_auxiliary_tracker is not None:
+            summary.update(count_auxiliary_tracker.summary())
         return summary
 
     with torch.no_grad():
@@ -127,11 +136,18 @@ def evaluate_policy(
                     if q_bet_1x is not None and best_aggressive_q is not None:
                         best_aggressive_margin_total += best_aggressive_q - q_bet_1x
                         best_aggressive_margin_count += 1
-                    if betting_auxiliary_tracker is not None and betting_auxiliary_config is not None:
+                    if betting_auxiliary_tracker is not None or count_auxiliary_tracker is not None:
                         proxy_info = compute_observed_hi_lo_proxy_from_response(
                             env_state.response,
                             n_decks=int(getattr(env_state.env.config, "n_decks", 8)),
                         )
+                        if count_auxiliary_tracker is not None and count_auxiliary_config is not None:
+                            count_auxiliary_tracker.record(
+                                count_bucket_logits=model_output.get("count_bucket_logits"),
+                                proxy_info=proxy_info,
+                                config=count_auxiliary_config,
+                            )
+                    if betting_auxiliary_tracker is not None and betting_auxiliary_config is not None:
                         betting_auxiliary_tracker.record(
                             q_values=q_values,
                             action_mask=action_mask,

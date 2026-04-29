@@ -9,7 +9,8 @@ from torch import nn
 from loss import compute_td_loss
 
 from .betting_auxiliary import betting_auxiliary_weight, compute_betting_count_proxy_ce_loss
-from .config import BettingAuxiliaryConfig, DistillationConfig, OptimizationConfig, TargetUpdateConfig
+from .config import BettingAuxiliaryConfig, CountAuxiliaryConfig, DistillationConfig, OptimizationConfig, TargetUpdateConfig
+from .count_auxiliary import compute_count_bucket_ce_loss, count_auxiliary_weight
 from .transfer_learning import compute_distillation_loss, distillation_weight
 
 
@@ -98,6 +99,7 @@ def train_gradient_step(
     teacher_model: nn.Module | None = None,
     distillation_config: DistillationConfig | None = None,
     betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
+    count_auxiliary_config: CountAuxiliaryConfig | None = None,
     update_count: int = 0,
 ) -> dict[str, Any]:
     start_time = perf_counter()
@@ -120,6 +122,8 @@ def train_gradient_step(
     lambda_distill = 0.0
     bet_aux_loss = td_loss.new_zeros(())
     lambda_bet_aux = 0.0
+    count_aux_loss = td_loss.new_zeros(())
+    lambda_count_aux = 0.0
     teacher_output: dict[str, Any] | None = None
     if teacher_model is not None and distillation_config is not None and distillation_config.enabled:
         teacher_state = batch.get("teacher_state")
@@ -154,6 +158,19 @@ def train_gradient_step(
         )
         total_loss = total_loss + (bet_aux_loss * lambda_bet_aux)
 
+    if count_auxiliary_config is not None and count_auxiliary_config.enabled:
+        count_auxiliary = batch.get("betting_auxiliary")
+        if count_auxiliary is None:
+            raise ValueError("betting_auxiliary is required in the batch when count auxiliary loss is enabled")
+        lambda_count_aux = count_auxiliary_weight(count_auxiliary_config, update_count)
+        count_aux_loss = compute_count_bucket_ce_loss(
+            student_output=loss_info["current_output"],
+            count_auxiliary=count_auxiliary,
+            config=count_auxiliary_config,
+            valid_rows=batch.get("padding_mask"),
+        )
+        total_loss = total_loss + (count_aux_loss * lambda_count_aux)
+
     total_loss.backward()
 
     if optimization_config.gradient_clipping:
@@ -177,6 +194,8 @@ def train_gradient_step(
             "distillation_weight": float(lambda_distill),
             "bet_aux_loss": float(bet_aux_loss.detach().item()),
             "bet_aux_weight": float(lambda_bet_aux),
+            "count_aux_loss": float(count_aux_loss.detach().item()),
+            "count_aux_weight": float(lambda_count_aux),
             "total_loss": float(total_loss.detach().item()),
             "loss": float(total_loss.detach().item()),
             "grad_norm": grad_norm,
@@ -191,6 +210,7 @@ def train_gradient_step(
         "td_loss": td_loss,
         "distillation_loss": distill_loss,
         "bet_aux_loss": bet_aux_loss,
+        "count_aux_loss": count_aux_loss,
         "teacher_output": teacher_output,
         "metrics": metrics,
     }

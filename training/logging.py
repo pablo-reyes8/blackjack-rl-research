@@ -117,6 +117,40 @@ class TrainingLogger:
             )
         return lines
 
+    def _format_count_auxiliary_eval(self, metrics: dict[str, Any]) -> list[str]:
+        if "count_aux_valid_states" not in metrics:
+            return []
+
+        valid_states = int(metrics.get("count_aux_valid_states", 0))
+        lines = [
+            "  CountAux: "
+            f"n={valid_states} | acc={float(metrics.get('count_aux_accuracy', 0.0)):.3f}",
+        ]
+        target_distribution = metrics.get("count_aux_target_distribution") or {}
+        if isinstance(target_distribution, dict):
+            lines.append(
+                "           target "
+                + " ".join(f"{bucket}:{float(target_distribution.get(bucket, 0.0)):.2f}" for bucket in ("low", "medium", "high", "very_high"))
+            )
+        pred_distribution = metrics.get("count_aux_pred_distribution") or {}
+        if isinstance(pred_distribution, dict):
+            lines.append(
+                "           pred   "
+                + " ".join(f"{bucket}:{float(pred_distribution.get(bucket, 0.0)):.2f}" for bucket in ("low", "medium", "high", "very_high"))
+            )
+        confusion = metrics.get("count_aux_confusion_matrix") or {}
+        if isinstance(confusion, dict):
+            for target_bucket in ("low", "medium", "high", "very_high"):
+                row = confusion.get(target_bucket)
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    "           "
+                    f"{target_bucket:<9} -> "
+                    + " ".join(f"{bucket}:{float(row.get(bucket, 0.0)):.2f}" for bucket in ("low", "medium", "high", "very_high"))
+                )
+        return lines
+
     def log_warmup(self, *, buffer_size: int, target_size: int, force: bool = False) -> None:
         if not self.config.enable:
             return
@@ -177,6 +211,10 @@ class TrainingLogger:
                 f"enabled={summary.get('betting_auxiliary_enabled', False)} | mode={summary.get('betting_auxiliary_mode')} | "
                 f"weight={summary.get('betting_auxiliary_weight', 0.0):.3f}->{summary.get('betting_auxiliary_final_weight', 0.0):.3f} | "
                 f"min_obs={int(summary.get('betting_auxiliary_min_observed_cards', 0))}",
+                "  Count Aux  : "
+                f"enabled={summary.get('count_auxiliary_enabled', False)} | mode={summary.get('count_auxiliary_mode')} | "
+                f"weight={summary.get('count_auxiliary_weight', 0.0):.3f}->{summary.get('count_auxiliary_final_weight', 0.0):.3f} | "
+                f"min_obs={int(summary.get('count_auxiliary_min_observed_cards', 0))}",
                 "  Eval / CKPT: "
                 f"eval_rounds={int(summary.get('eval_rounds', 0))} | eval_decisions={int(summary.get('eval_max_decisions', 0))} | "
                 f"checkpoints={summary.get('checkpoint_dir')}",
@@ -216,7 +254,8 @@ class TrainingLogger:
                 f"eps_bet={metrics.get('epsilon_betting', 0.0):.4f} | eps_play={metrics.get('epsilon_playing', 0.0):.4f} | "
                 f"n_step={metrics.get('mean_n_steps', 1.0):.2f} | phase_w={metrics.get('mean_phase_weight', 1.0):.2f} | "
                 f"distill={metrics.get('distillation_loss', 0.0):.6f} @ {metrics.get('distillation_weight', 0.0):.3f} | "
-                f"bet_aux={metrics.get('bet_aux_loss', 0.0):.6f} @ {metrics.get('bet_aux_weight', 0.0):.3f}",
+                f"bet_aux={metrics.get('bet_aux_loss', 0.0):.6f} @ {metrics.get('bet_aux_weight', 0.0):.3f} | "
+                f"count_aux={metrics.get('count_aux_loss', 0.0):.6f} @ {metrics.get('count_aux_weight', 0.0):.3f}",
             ],
         )
 
@@ -261,7 +300,8 @@ class TrainingLogger:
                 "  Policy  : "
                 f"eps_bet={summary.get('epsilon_betting', 0.0):.4f} | eps_play={summary.get('epsilon_playing', 0.0):.4f} | "
                 f"lr={summary.get('learning_rate', 0.0):.2e} | grad={summary.get('grad_norm', 0.0):.4f} | "
-                f"bet_aux={summary.get('bet_aux_loss', 0.0):.6f} @ {summary.get('bet_aux_weight', 0.0):.3f}",
+                f"bet_aux={summary.get('bet_aux_loss', 0.0):.6f} @ {summary.get('bet_aux_weight', 0.0):.3f} | "
+                f"count_aux={summary.get('count_aux_loss', 0.0):.6f} @ {summary.get('count_aux_weight', 0.0):.3f}",
                 "  Outcomes: "
                 f"win={summary.get('win_rate', 0.0):.4f} | push={summary.get('push_rate', 0.0):.4f} | loss={summary.get('loss_rate', 0.0):.4f} | blackjack={summary.get('blackjack_rate', 0.0):.4f} | bust={summary.get('bust_rate', 0.0):.4f}",
                 "  Betting : "
@@ -297,6 +337,7 @@ class TrainingLogger:
         ]
         lines.extend(self._format_bet_q_diagnostics(metrics))
         lines.extend(self._format_betting_auxiliary_eval(metrics))
+        lines.extend(self._format_count_auxiliary_eval(metrics))
         lines.extend(
             [
                 "  Playing : "

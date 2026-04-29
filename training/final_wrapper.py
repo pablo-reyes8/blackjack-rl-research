@@ -12,6 +12,7 @@ from model.encoder import BlackjackObservationEncoder, EncoderConfig
 from training import (
     BettingAuxiliaryConfig,
     CheckpointConfig,
+    CountAuxiliaryConfig,
     DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
@@ -209,6 +210,9 @@ def _build_model(
     advantage_hidden_dim: int,
     use_phase_adapters: bool,
     use_module_gating: bool,
+    use_count_auxiliary_head: bool,
+    count_auxiliary_hidden_dim: int,
+    count_auxiliary_num_buckets: int,
     model_overrides: Mapping[str, Any] | None,
 ) -> Any:
     if architecture not in MODEL_CLASS_BY_ARCHITECTURE:
@@ -230,6 +234,9 @@ def _build_model(
         advantage_hidden_dim=advantage_hidden_dim,
         use_phase_adapters=use_phase_adapters,
         use_module_gating=use_module_gating,
+        use_count_auxiliary_head=use_count_auxiliary_head,
+        count_auxiliary_hidden_dim=count_auxiliary_hidden_dim,
+        count_auxiliary_num_buckets=count_auxiliary_num_buckets,
     )
     _apply_overrides(model_config, model_overrides)
 
@@ -370,6 +377,9 @@ def run_blackjack_transfer_stage(
     advantage_hidden_dim: int = 128,
     use_phase_adapters: bool = False,
     use_module_gating: bool = False,
+    use_count_auxiliary_head: bool | None = None,
+    count_auxiliary_hidden_dim: int = 128,
+    count_auxiliary_num_buckets: int = 4,
     freeze_playing_parts: bool = False,
     use_optimizer_param_groups: bool = False,
     backbone_lr: float = 1e-5,
@@ -399,6 +409,16 @@ def run_blackjack_transfer_stage(
     betting_auxiliary_min_observed_cards: int = 12,
     betting_auxiliary_betting_phase_only: bool = True,
     betting_auxiliary_class_weights: tuple[float, float, float, float] | None = None,
+    count_auxiliary_enabled: bool = False,
+    count_auxiliary_mode: str = "bucket_ce",
+    count_auxiliary_weight: float = 0.10,
+    count_auxiliary_final_weight: float = 0.03,
+    count_auxiliary_decay_steps: int = 50_000,
+    count_auxiliary_threshold_medium: float = 1.0,
+    count_auxiliary_threshold_high: float = 2.0,
+    count_auxiliary_threshold_very_high: float = 4.0,
+    count_auxiliary_min_observed_cards: int = 20,
+    count_auxiliary_class_weights: tuple[float, float, float, float] | None = (0.5, 1.0, 1.25, 1.5),
 
     # Epsilon
     betting_epsilon_start: float = 0.20,
@@ -582,6 +602,12 @@ def run_blackjack_transfer_stage(
     )
     _apply_overrides(blackjack_config, blackjack_overrides)
     resolved_betting_auxiliary_enabled = axu_loss_bet if betting_auxiliary_enabled is None else betting_auxiliary_enabled
+    resolved_count_auxiliary_enabled = bool(count_auxiliary_enabled)
+    resolved_use_count_auxiliary_head = (
+        resolved_count_auxiliary_enabled
+        if use_count_auxiliary_head is None
+        else bool(use_count_auxiliary_head)
+    )
     resolved_bet_multipliers = tuple(int(multiplier) for multiplier in blackjack_config.bet_multipliers)
     if resolved_betting_auxiliary_enabled:
         if resolved_bet_multipliers != (1, 2, 3, 4):
@@ -594,6 +620,18 @@ def run_blackjack_transfer_stage(
         ):
             raise ValueError(
                 "Betting auxiliary mode requires observed history or discard summary in the observation"
+            )
+    if resolved_count_auxiliary_enabled:
+        if not resolved_use_count_auxiliary_head:
+            raise ValueError(
+                "count_auxiliary_enabled=True requires use_count_auxiliary_head=True (or leave it as None for auto-enable)"
+            )
+        if (
+            not bool(getattr(observation_config, "obs_include_observed_cards_history", False))
+            and not bool(getattr(observation_config, "obs_include_discard_summary", False))
+        ):
+            raise ValueError(
+                "Count auxiliary mode requires observed history or discard summary in the observation"
             )
 
     envs: list[BlackjackEnvironment] = []
@@ -654,6 +692,9 @@ def run_blackjack_transfer_stage(
         advantage_hidden_dim=advantage_hidden_dim,
         use_phase_adapters=use_phase_adapters,
         use_module_gating=use_module_gating,
+        use_count_auxiliary_head=resolved_use_count_auxiliary_head,
+        count_auxiliary_hidden_dim=count_auxiliary_hidden_dim,
+        count_auxiliary_num_buckets=count_auxiliary_num_buckets,
         model_overrides=model_overrides,
     )
 
@@ -750,6 +791,19 @@ def run_blackjack_transfer_stage(
         bet_multipliers=resolved_bet_multipliers,
         class_weights=betting_auxiliary_class_weights,
     )
+    count_auxiliary_config = CountAuxiliaryConfig(
+        enabled=resolved_count_auxiliary_enabled,
+        mode=count_auxiliary_mode,
+        weight=count_auxiliary_weight,
+        final_weight=count_auxiliary_final_weight,
+        decay_steps=count_auxiliary_decay_steps,
+        threshold_medium=count_auxiliary_threshold_medium,
+        threshold_high=count_auxiliary_threshold_high,
+        threshold_very_high=count_auxiliary_threshold_very_high,
+        min_observed_cards=count_auxiliary_min_observed_cards,
+        num_buckets=count_auxiliary_num_buckets,
+        class_weights=count_auxiliary_class_weights,
+    )
 
     print_config = PrintConfig(
         enable=enable_prints,
@@ -807,6 +861,7 @@ def run_blackjack_transfer_stage(
         evaluation=evaluation_config,
         checkpoints=checkpoint_config,
         betting_auxiliary=betting_auxiliary_config,
+        count_auxiliary=count_auxiliary_config,
         transfer=transfer_config,
         prints=print_config,
     )
@@ -843,6 +898,13 @@ def run_blackjack_transfer_stage(
         "betting_auxiliary_mode": betting_auxiliary_config.mode,
         "betting_auxiliary_weight": betting_auxiliary_config.weight,
         "betting_auxiliary_final_weight": betting_auxiliary_config.final_weight,
+        "count_auxiliary_enabled": count_auxiliary_config.enabled,
+        "count_auxiliary_mode": count_auxiliary_config.mode,
+        "count_auxiliary_weight": count_auxiliary_config.weight,
+        "count_auxiliary_final_weight": count_auxiliary_config.final_weight,
+        "count_auxiliary_min_observed_cards": count_auxiliary_config.min_observed_cards,
+        "use_count_auxiliary_head": resolved_use_count_auxiliary_head,
+        "count_auxiliary_hidden_dim": count_auxiliary_hidden_dim,
         "state_dim": model.state_dim,
         "use_optimizer_param_groups": use_optimizer_param_groups,
         "freeze_playing_parts": freeze_playing_parts,

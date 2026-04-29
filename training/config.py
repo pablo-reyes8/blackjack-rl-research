@@ -216,6 +216,43 @@ class BettingAuxiliaryConfig:
 
 
 @dataclass(slots=True)
+class CountAuxiliaryConfig:
+    enabled: bool = False
+    mode: str = "bucket_ce"
+    weight: float = 0.10
+    final_weight: float = 0.03
+    decay_steps: int = 50_000
+    threshold_medium: float = 1.0
+    threshold_high: float = 2.0
+    threshold_very_high: float = 4.0
+    min_observed_cards: int = 20
+    num_buckets: int = 4
+    class_weights: tuple[float, float, float, float] | None = (0.5, 1.0, 1.25, 1.5)
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"bucket_ce", "proxy_huber"}:
+            raise ValueError("mode must be 'bucket_ce' or 'proxy_huber'")
+        if self.weight < 0 or self.final_weight < 0:
+            raise ValueError("weight and final_weight must be non-negative")
+        if self.decay_steps <= 0:
+            raise ValueError("decay_steps must be positive")
+        if self.min_observed_cards < 0:
+            raise ValueError("min_observed_cards must be non-negative")
+        if self.num_buckets != 4:
+            raise ValueError("Only num_buckets=4 is currently supported")
+        if not (self.threshold_medium <= self.threshold_high <= self.threshold_very_high):
+            raise ValueError(
+                "thresholds must satisfy threshold_medium <= threshold_high <= threshold_very_high"
+            )
+        if self.class_weights is not None:
+            self.class_weights = tuple(float(weight) for weight in self.class_weights)
+            if len(self.class_weights) != 4:
+                raise ValueError("class_weights must have length 4: low, medium, high, very_high")
+            if any(weight < 0 for weight in self.class_weights):
+                raise ValueError("class_weights must be non-negative")
+
+
+@dataclass(slots=True)
 class TransferLearningConfig:
     enabled: bool = False
     teacher_checkpoint_path: str | None = None
@@ -280,6 +317,7 @@ class TrainingPipelineConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     checkpoints: CheckpointConfig = field(default_factory=CheckpointConfig)
     betting_auxiliary: BettingAuxiliaryConfig = field(default_factory=BettingAuxiliaryConfig)
+    count_auxiliary: CountAuxiliaryConfig = field(default_factory=CountAuxiliaryConfig)
     transfer: TransferLearningConfig = field(default_factory=TransferLearningConfig)
     prints: PrintConfig = field(default_factory=PrintConfig)
 
@@ -292,6 +330,8 @@ class TrainingPipelineConfig:
             raise TypeError("n_step must be an NStepConfig instance")
         if not isinstance(self.betting_auxiliary, BettingAuxiliaryConfig):
             raise TypeError("betting_auxiliary must be a BettingAuxiliaryConfig instance")
+        if not isinstance(self.count_auxiliary, CountAuxiliaryConfig):
+            raise TypeError("count_auxiliary must be a CountAuxiliaryConfig instance")
         if not isinstance(self.transfer, TransferLearningConfig):
             raise TypeError("transfer must be a TransferLearningConfig instance")
 
@@ -304,6 +344,7 @@ class TrainingPipelineConfig:
 
         epsilon_config = data.get("epsilon", {})
         betting_auxiliary_config = BettingAuxiliaryConfig(**data.get("betting_auxiliary", {}))
+        count_auxiliary_config = CountAuxiliaryConfig(**data.get("count_auxiliary", {}))
         transfer_config = dict(data.get("transfer", {}))
         distillation_config = DistillationConfig(**transfer_config.pop("distillation", {}))
         return cls(
@@ -319,6 +360,7 @@ class TrainingPipelineConfig:
             evaluation=EvaluationConfig(**data.get("evaluation", {})),
             checkpoints=CheckpointConfig(**data.get("checkpoints", {})),
             betting_auxiliary=betting_auxiliary_config,
+            count_auxiliary=count_auxiliary_config,
             transfer=TransferLearningConfig(distillation=distillation_config, **transfer_config),
             prints=PrintConfig(**data.get("prints", {})),
         )

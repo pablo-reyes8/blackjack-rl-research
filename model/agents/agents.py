@@ -51,6 +51,23 @@ class BaseBlackjackQNetwork(nn.Module):
             feature_gate_index[start:end] = gate_index
         self.register_buffer("_module_gate_feature_index", feature_gate_index, persistent=False)
 
+    def _build_count_auxiliary_head(self, feature_dim: int) -> nn.Module | None:
+        if not bool(getattr(self.config, "use_count_auxiliary_head", False)):
+            return None
+        hidden_dim = int(getattr(self.config, "count_auxiliary_hidden_dim", 128))
+        num_buckets = int(getattr(self.config, "count_auxiliary_num_buckets", 4))
+        return nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_buckets),
+        )
+
+    def _maybe_forward_count_auxiliary(self, features: torch.Tensor) -> torch.Tensor | None:
+        head = getattr(self, "count_auxiliary_head", None)
+        if head is None:
+            return None
+        return head(features)
+
     def _build_phase_adapter(self, hidden_dim: int) -> nn.Module:
         if not getattr(self.config, "use_phase_adapters", False):
             return nn.Identity()
@@ -267,6 +284,7 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
         self.play_adapter = self._build_phase_adapter(hidden_dim)
         self.bet_head = nn.Linear(hidden_dim, self.num_bet_actions)
         self.play_head = nn.Linear(hidden_dim, self.num_play_actions)
+        self.count_auxiliary_head = self._build_count_auxiliary_head(hidden_dim)
 
     def forward(self, inputs: Any) -> dict[str, Any]:
         encoded = self._prepare_feedforward_batch(inputs)
@@ -276,9 +294,10 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
         play_hidden = self.play_adapter(hidden)
         bet_q_values = self.bet_head(bet_hidden)
         play_q_values = self.play_head(play_hidden)
+        count_bucket_logits = self._maybe_forward_count_auxiliary(hidden)
         q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
-        return {
+        output = {
             "q_values": q_values,
             "bet_q_values": bet_q_values,
             "play_q_values": play_q_values,
@@ -297,6 +316,9 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
                 **(encoded.get("metadata") or {}),
             },
         }
+        if count_bucket_logits is not None:
+            output["count_bucket_logits"] = count_bucket_logits
+        return output
 
 
 class RecurrentDoubleDQN(BaseBlackjackQNetwork):
@@ -349,6 +371,7 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
             activation=self.config.activation,
             dropout=self.config.dropout,
         )
+        self.count_auxiliary_head = self._build_count_auxiliary_head(self.config.recurrent_hidden_dim)
 
     def init_hidden(self, batch_size: int, device: torch.device | None = None) -> Any:
         return self.recurrent_backbone.init_hidden(batch_size, device or self._device())
@@ -367,9 +390,10 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
         play_hidden = self.play_adapter(recurrent_output)
         bet_q_values = self.bet_head(bet_hidden)
         play_q_values = self.play_head(play_hidden)
+        count_bucket_logits = self._maybe_forward_count_auxiliary(recurrent_output)
         q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
-        return {
+        output = {
             "q_values": q_values,
             "bet_q_values": bet_q_values,
             "play_q_values": play_q_values,
@@ -391,10 +415,13 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
                 **(encoded.get("metadata") or {}),
             },
         }
+        if count_bucket_logits is not None:
+            output["count_bucket_logits"] = count_bucket_logits
+        return output
 
     def forward_step(self, inputs: Any, hidden_state: Any = None) -> dict[str, Any]:
         output = self.forward(inputs, hidden_state=hidden_state)
-        return {
+        squeezed = {
             **output,
             "q_values": output["q_values"].squeeze(1),
             "bet_q_values": output["bet_q_values"].squeeze(1),
@@ -406,6 +433,9 @@ class RecurrentDoubleDQN(BaseBlackjackQNetwork):
             "projected_state": output["projected_state"].squeeze(1),
             "recurrent_output": output["recurrent_output"].squeeze(1),
         }
+        if "count_bucket_logits" in output:
+            squeezed["count_bucket_logits"] = output["count_bucket_logits"].squeeze(1)
+        return squeezed
 
 
 class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
@@ -464,6 +494,7 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
             activation=self.config.activation,
             dropout=self.config.dropout,
         )
+        self.count_auxiliary_head = self._build_count_auxiliary_head(self.config.recurrent_hidden_dim)
 
     def init_hidden(self, batch_size: int, device: torch.device | None = None) -> Any:
         return self.recurrent_backbone.init_hidden(batch_size, device or self._device())
@@ -482,11 +513,12 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
         play_hidden = self.play_adapter(recurrent_output)
         bet_q_values, bet_values, bet_advantages = self.bet_head(bet_hidden)
         play_q_values, play_values, play_advantages = self.play_head(play_hidden)
+        count_bucket_logits = self._maybe_forward_count_auxiliary(recurrent_output)
         q_values = self._combine_phase_q_values(bet_q_values, play_q_values)
         advantages = self._combine_phase_q_values(bet_advantages, play_advantages)
         values = (bet_values + play_values) / 2.0
         masked_q_values = apply_action_mask(q_values, encoded["action_mask"])
-        return {
+        output = {
             "q_values": q_values,
             "bet_q_values": bet_q_values,
             "play_q_values": play_q_values,
@@ -514,10 +546,13 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
                 **(encoded.get("metadata") or {}),
             },
         }
+        if count_bucket_logits is not None:
+            output["count_bucket_logits"] = count_bucket_logits
+        return output
 
     def forward_step(self, inputs: Any, hidden_state: Any = None) -> dict[str, Any]:
         output = self.forward(inputs, hidden_state=hidden_state)
-        return {
+        squeezed = {
             **output,
             "q_values": output["q_values"].squeeze(1),
             "bet_q_values": output["bet_q_values"].squeeze(1),
@@ -535,3 +570,6 @@ class DuelingRecurrentDoubleDQN(BaseBlackjackQNetwork):
             "projected_state": output["projected_state"].squeeze(1),
             "recurrent_output": output["recurrent_output"].squeeze(1),
         }
+        if "count_bucket_logits" in output:
+            squeezed["count_bucket_logits"] = output["count_bucket_logits"].squeeze(1)
+        return squeezed

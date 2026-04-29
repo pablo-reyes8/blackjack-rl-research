@@ -22,6 +22,7 @@ from model.encoder import EncoderConfig
 from training import (
     BettingAuxiliaryConfig,
     CheckpointConfig,
+    CountAuxiliaryConfig,
     DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
@@ -211,6 +212,9 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
     betting_auxiliary = BettingAuxiliaryConfig(
         **_ensure_mapping(values.get("betting_auxiliary"), context="training.betting_auxiliary")
     )
+    count_auxiliary = CountAuxiliaryConfig(
+        **_ensure_mapping(values.get("count_auxiliary"), context="training.count_auxiliary")
+    )
     transfer_data = _ensure_mapping(values.get("transfer"), context="training.transfer")
     distillation = DistillationConfig(
         **_ensure_mapping(transfer_data.pop("distillation", None), context="training.transfer.distillation")
@@ -228,6 +232,7 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
         evaluation=evaluation,
         checkpoints=checkpoints,
         betting_auxiliary=betting_auxiliary,
+        count_auxiliary=count_auxiliary,
         transfer=transfer,
         prints=prints,
     )

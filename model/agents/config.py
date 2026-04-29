@@ -22,6 +22,9 @@ class AgentNetworkConfig:
     advantage_hidden_dim: int = 128
     use_phase_adapters: bool = True
     use_module_gating: bool = True
+    use_count_auxiliary_head: bool = False
+    count_auxiliary_hidden_dim: int = 128
+    count_auxiliary_num_buckets: int = 4
 
     def __post_init__(self) -> None:
         if self.architecture not in {"feedforward", "recurrent", "dueling_recurrent"}:
@@ -42,6 +45,10 @@ class AgentNetworkConfig:
             raise ValueError("projection_dim and recurrent_hidden_dim must be positive")
         if self.head_hidden_dim <= 0 or self.value_hidden_dim <= 0 or self.advantage_hidden_dim <= 0:
             raise ValueError("head_hidden_dim, value_hidden_dim, and advantage_hidden_dim must be positive")
+        if self.count_auxiliary_hidden_dim <= 0:
+            raise ValueError("count_auxiliary_hidden_dim must be positive")
+        if self.count_auxiliary_num_buckets <= 0:
+            raise ValueError("count_auxiliary_num_buckets must be positive")
         if any(dim <= 0 for dim in self.feedforward_hidden_dims):
             raise ValueError("feedforward_hidden_dims must contain positive sizes")
 
