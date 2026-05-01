@@ -445,8 +445,6 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 - No experiment tracking backend integration (e.g. W&B)
 - No hyperparameter sweep orchestration
 - No pre-trained model zoo
-- No prioritized replay yet
-- No explicit calibration layer for betting confidence / risk control
 - No published study yet on robustness across different table populations, shoe penetrations, and exogenous-card profiles
 
 ---
