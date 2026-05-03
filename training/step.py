@@ -9,8 +9,16 @@ from torch import nn
 from loss import compute_td_loss
 
 from .betting_auxiliary import betting_auxiliary_weight, compute_betting_count_proxy_ce_loss
-from .config import BettingAuxiliaryConfig, CountAuxiliaryConfig, DistillationConfig, OptimizationConfig, TargetUpdateConfig
+from .config import (
+    BettingAuxiliaryConfig,
+    CountAuxiliaryConfig,
+    DistillationConfig,
+    ObservedEVRankingConfig,
+    OptimizationConfig,
+    TargetUpdateConfig,
+)
 from .count_auxiliary import compute_count_bucket_ce_loss, count_auxiliary_weight
+from .ev_calibration import EVBucketActionTable, compute_observed_ev_ranking_loss, observed_ev_ranking_weight
 from .transfer_learning import compute_distillation_loss, distillation_weight
 
 
@@ -100,6 +108,8 @@ def train_gradient_step(
     distillation_config: DistillationConfig | None = None,
     betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
     count_auxiliary_config: CountAuxiliaryConfig | None = None,
+    observed_ev_ranking_config: ObservedEVRankingConfig | None = None,
+    ev_bucket_action_table: EVBucketActionTable | None = None,
     update_count: int = 0,
 ) -> dict[str, Any]:
     start_time = perf_counter()
@@ -124,6 +134,8 @@ def train_gradient_step(
     lambda_bet_aux = 0.0
     count_aux_loss = td_loss.new_zeros(())
     lambda_count_aux = 0.0
+    ev_rank_loss = td_loss.new_zeros(())
+    lambda_ev_rank = 0.0
     teacher_output: dict[str, Any] | None = None
     if teacher_model is not None and distillation_config is not None and distillation_config.enabled:
         teacher_state = batch.get("teacher_state")
@@ -171,6 +183,20 @@ def train_gradient_step(
         )
         total_loss = total_loss + (count_aux_loss * lambda_count_aux)
 
+    if observed_ev_ranking_config is not None and observed_ev_ranking_config.enabled:
+        if ev_bucket_action_table is None:
+            raise ValueError("ev_bucket_action_table is required when observed EV ranking is enabled")
+        lambda_ev_rank = observed_ev_ranking_weight(observed_ev_ranking_config, update_count)
+        ev_rank_loss = compute_observed_ev_ranking_loss(
+            student_output=loss_info["current_output"],
+            batch=batch,
+            config=observed_ev_ranking_config,
+            ev_table=ev_bucket_action_table,
+            bet_action_names=tuple(online_network.bet_action_names),
+            valid_rows=batch.get("padding_mask"),
+        )
+        total_loss = total_loss + (ev_rank_loss * lambda_ev_rank)
+
     total_loss.backward()
 
     if optimization_config.gradient_clipping:
@@ -196,6 +222,8 @@ def train_gradient_step(
             "bet_aux_weight": float(lambda_bet_aux),
             "count_aux_loss": float(count_aux_loss.detach().item()),
             "count_aux_weight": float(lambda_count_aux),
+            "ev_rank_loss": float(ev_rank_loss.detach().item()),
+            "ev_rank_weight": float(lambda_ev_rank),
             "total_loss": float(total_loss.detach().item()),
             "loss": float(total_loss.detach().item()),
             "grad_norm": grad_norm,
@@ -211,6 +239,7 @@ def train_gradient_step(
         "distillation_loss": distill_loss,
         "bet_aux_loss": bet_aux_loss,
         "count_aux_loss": count_aux_loss,
+        "ev_rank_loss": ev_rank_loss,
         "teacher_output": teacher_output,
         "metrics": metrics,
     }

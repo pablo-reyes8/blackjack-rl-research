@@ -16,8 +16,10 @@ from training import (
     DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
+    EVCalibrationDiagnosticsConfig,
     EvaluationConfig,
     NStepConfig,
+    ObservedEVRankingConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -425,6 +427,30 @@ def run_blackjack_transfer_stage(
     count_auxiliary_threshold_very_high: float = 4.0,
     count_auxiliary_min_observed_cards: int = 20,
     count_auxiliary_class_weights: tuple[float, float, float, float] | None = (0.5, 1.0, 1.25, 1.5),
+    ev_calibration_diagnostics_enabled: bool = False,
+    ev_calibration_threshold_medium: float = 1.0,
+    ev_calibration_threshold_high: float = 2.0,
+    ev_calibration_threshold_very_high: float = 4.0,
+    ev_calibration_min_observed_cards: int = 20,
+    ev_calibration_betting_phase_only: bool = True,
+    ev_calibration_compute_confidence_intervals: bool = True,
+    ev_calibration_confidence_z: float = 1.96,
+    ev_calibration_min_samples_to_report: int = 10,
+    observed_ev_ranking_enabled: bool = False,
+    observed_ev_ranking_weight: float = 0.0,
+    observed_ev_ranking_final_weight: float = 0.0,
+    observed_ev_ranking_decay_steps: int = 50_000,
+    observed_ev_ranking_margin: float = 0.05,
+    observed_ev_ranking_threshold_medium: float = 1.0,
+    observed_ev_ranking_threshold_high: float = 2.0,
+    observed_ev_ranking_threshold_very_high: float = 4.0,
+    observed_ev_ranking_min_observed_cards: int = 20,
+    observed_ev_ranking_betting_phase_only: bool = True,
+    observed_ev_ranking_min_bucket_action_samples: int = 30,
+    observed_ev_ranking_refresh_interval_updates: int = 1_000,
+    observed_ev_ranking_compare_against_1x_only: bool = True,
+    observed_ev_ranking_min_ev_gap_per_round: float = 0.005,
+    observed_ev_ranking_max_pairs_per_batch: int = 512,
 
     # Epsilon
     betting_epsilon_start: float = 0.20,
@@ -616,9 +642,9 @@ def run_blackjack_transfer_stage(
     )
     resolved_bet_multipliers = tuple(int(multiplier) for multiplier in blackjack_config.bet_multipliers)
     if resolved_betting_auxiliary_enabled:
-        if resolved_bet_multipliers != (1, 2, 3, 4):
+        if any(multiplier not in (1, 2, 3, 4) for multiplier in resolved_bet_multipliers):
             raise ValueError(
-                "axu_loss_bet/betting_auxiliary_enabled currently requires bet_multipliers=(1, 2, 3, 4)"
+                "axu_loss_bet/betting_auxiliary_enabled supports only multipliers in {1, 2, 3, 4}"
             )
         if (
             not bool(getattr(observation_config, "obs_include_observed_cards_history", False))
@@ -638,6 +664,14 @@ def run_blackjack_transfer_stage(
         ):
             raise ValueError(
                 "Count auxiliary mode requires observed history or discard summary in the observation"
+            )
+    if ev_calibration_diagnostics_enabled or observed_ev_ranking_enabled:
+        if (
+            not bool(getattr(observation_config, "obs_include_observed_cards_history", False))
+            and not bool(getattr(observation_config, "obs_include_discard_summary", False))
+        ):
+            raise ValueError(
+                "EV calibration/ranking requires observed history or discard summary in the observation"
             )
 
     envs: list[BlackjackEnvironment] = []
@@ -812,6 +846,34 @@ def run_blackjack_transfer_stage(
         num_buckets=count_auxiliary_num_buckets,
         class_weights=count_auxiliary_class_weights,
     )
+    ev_calibration_config = EVCalibrationDiagnosticsConfig(
+        enabled=ev_calibration_diagnostics_enabled,
+        threshold_medium=ev_calibration_threshold_medium,
+        threshold_high=ev_calibration_threshold_high,
+        threshold_very_high=ev_calibration_threshold_very_high,
+        min_observed_cards=ev_calibration_min_observed_cards,
+        betting_phase_only=ev_calibration_betting_phase_only,
+        compute_confidence_intervals=ev_calibration_compute_confidence_intervals,
+        confidence_z=ev_calibration_confidence_z,
+        min_samples_to_report=ev_calibration_min_samples_to_report,
+    )
+    observed_ev_ranking_config = ObservedEVRankingConfig(
+        enabled=observed_ev_ranking_enabled,
+        weight=observed_ev_ranking_weight,
+        final_weight=observed_ev_ranking_final_weight,
+        decay_steps=observed_ev_ranking_decay_steps,
+        margin=observed_ev_ranking_margin,
+        threshold_medium=observed_ev_ranking_threshold_medium,
+        threshold_high=observed_ev_ranking_threshold_high,
+        threshold_very_high=observed_ev_ranking_threshold_very_high,
+        min_observed_cards=observed_ev_ranking_min_observed_cards,
+        betting_phase_only=observed_ev_ranking_betting_phase_only,
+        min_bucket_action_samples=observed_ev_ranking_min_bucket_action_samples,
+        refresh_interval_updates=observed_ev_ranking_refresh_interval_updates,
+        compare_against_1x_only=observed_ev_ranking_compare_against_1x_only,
+        min_ev_gap_per_round=observed_ev_ranking_min_ev_gap_per_round,
+        max_pairs_per_batch=observed_ev_ranking_max_pairs_per_batch,
+    )
 
     print_config = PrintConfig(
         enable=enable_prints,
@@ -870,6 +932,8 @@ def run_blackjack_transfer_stage(
         checkpoints=checkpoint_config,
         betting_auxiliary=betting_auxiliary_config,
         count_auxiliary=count_auxiliary_config,
+        ev_calibration_diagnostics=ev_calibration_config,
+        observed_ev_ranking=observed_ev_ranking_config,
         transfer=transfer_config,
         prints=print_config,
     )
@@ -911,6 +975,13 @@ def run_blackjack_transfer_stage(
         "count_auxiliary_weight": count_auxiliary_config.weight,
         "count_auxiliary_final_weight": count_auxiliary_config.final_weight,
         "count_auxiliary_min_observed_cards": count_auxiliary_config.min_observed_cards,
+        "ev_calibration_diagnostics_enabled": ev_calibration_config.enabled,
+        "ev_calibration_min_observed_cards": ev_calibration_config.min_observed_cards,
+        "ev_calibration_min_samples_to_report": ev_calibration_config.min_samples_to_report,
+        "observed_ev_ranking_enabled": observed_ev_ranking_config.enabled,
+        "observed_ev_ranking_weight": observed_ev_ranking_config.weight,
+        "observed_ev_ranking_final_weight": observed_ev_ranking_config.final_weight,
+        "observed_ev_ranking_min_bucket_action_samples": observed_ev_ranking_config.min_bucket_action_samples,
         "use_count_auxiliary_head": resolved_use_count_auxiliary_head,
         "count_auxiliary_hidden_dim": count_auxiliary_hidden_dim,
         "mask_bet_features_for_playing": mask_bet_features_for_playing,

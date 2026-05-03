@@ -78,6 +78,7 @@ def main() -> None:
         reset_hidden_on_round_end=checkpoint_pipeline.trainer.reset_hidden_on_round_end,
         betting_auxiliary_config=checkpoint_pipeline.betting_auxiliary,
         count_auxiliary_config=checkpoint_pipeline.count_auxiliary,
+        ev_calibration_config=checkpoint_pipeline.ev_calibration_diagnostics,
     )
 
     result = {

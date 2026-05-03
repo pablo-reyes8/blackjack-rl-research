@@ -7,6 +7,11 @@ from typing import Any
 
 from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER, PLAYING_ACTION_ORDER, split_value
 
+from .betting_auxiliary import compute_observed_hi_lo_proxy_from_response
+from .config import EVCalibrationDiagnosticsConfig
+from .count_utils import count_proxy_bucket_name
+from .ev_calibration import EVBucketActionTable
+
 
 @dataclass(slots=True)
 class ScalarMetricAccumulator:
@@ -29,6 +34,7 @@ class ScalarMetricAccumulator:
 
 @dataclass(slots=True)
 class BehaviorMetricsTracker:
+    ev_calibration_config: EVCalibrationDiagnosticsConfig | None = None
     action_counts: Counter[str] = field(default_factory=Counter)
     phase_action_counts: dict[str, Counter[str]] = field(
         default_factory=lambda: defaultdict(Counter)
@@ -50,8 +56,10 @@ class BehaviorMetricsTracker:
     action_by_situation: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
     table_counts: Counter[str] = field(default_factory=Counter)
     pending_bets_by_round: dict[tuple[str, int], str] = field(default_factory=dict)
+    pending_bet_bucket_by_round: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict)
     bet_reward_totals: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
     bet_round_counts: Counter[str] = field(default_factory=Counter)
+    ev_bucket_action_table: EVBucketActionTable = field(default_factory=EVBucketActionTable)
     hand_close_reason_counts: Counter[str] = field(default_factory=Counter)
     round_reward_samples: list[float] = field(default_factory=list)
 
@@ -72,6 +80,7 @@ class BehaviorMetricsTracker:
         was_random: bool,
         table_key: str,
         env_key: str,
+        n_decks: int = 8,
     ) -> None:
         self.action_counts[action_name] += 1
         self.total_decisions += 1
@@ -92,7 +101,24 @@ class BehaviorMetricsTracker:
         insurance_offer = bool(public_state.get("insurance", {}).get("offer_active", False))
 
         if phase == "betting" and action_name in BET_ACTION_ORDER:
-            self.pending_bets_by_round[(env_key, int(info.get("round_index", public_state.get("round_index", 0))))] = action_name
+            round_key = (env_key, int(info.get("round_index", public_state.get("round_index", 0))))
+            self.pending_bets_by_round[round_key] = action_name
+            if self.ev_calibration_config is not None and self.ev_calibration_config.enabled:
+                proxy_info = compute_observed_hi_lo_proxy_from_response(response, n_decks=n_decks)
+                observed_cards = int(proxy_info.get("observed_cards", 0))
+                if observed_cards >= int(self.ev_calibration_config.min_observed_cards):
+                    true_count_proxy = float(proxy_info.get("true_count_proxy", 0.0))
+                    self.pending_bet_bucket_by_round[round_key] = {
+                        "bucket": count_proxy_bucket_name(
+                            true_count_proxy,
+                            threshold_medium=self.ev_calibration_config.threshold_medium,
+                            threshold_high=self.ev_calibration_config.threshold_high,
+                            threshold_very_high=self.ev_calibration_config.threshold_very_high,
+                        ),
+                        "action": action_name,
+                        "true_count_proxy": true_count_proxy,
+                        "observed_cards": observed_cards,
+                    }
 
         if current_hand:
             cards = current_hand.get("cards", [])
@@ -145,6 +171,13 @@ class BehaviorMetricsTracker:
         if bet_action is not None:
             self.bet_reward_totals[bet_action] += float(response["reward"])
             self.bet_round_counts[bet_action] += 1
+        bucket_entry = self.pending_bet_bucket_by_round.pop(round_key, None)
+        if bucket_entry is not None:
+            self.ev_bucket_action_table.update(
+                str(bucket_entry["bucket"]),
+                str(bucket_entry["action"]),
+                float(response["reward"]),
+            )
 
     def summary(self) -> dict[str, Any]:
         total_hands = max(self.total_hands, 1)
@@ -172,7 +205,7 @@ class BehaviorMetricsTracker:
             round_reward_variance = sum(
                 (reward - round_reward_mean) ** 2 for reward in self.round_reward_samples
             ) / len(self.round_reward_samples)
-        return {
+        summary = {
             "reward_per_round": self.total_reward / total_rounds,
             "reward_per_hand": self.total_reward / total_hands,
             "ev_per_1000_hands": 1000.0 * self.total_reward / total_hands,
@@ -213,3 +246,12 @@ class BehaviorMetricsTracker:
             "action_by_situation": {key: dict(counter) for key, counter in self.action_by_situation.items()},
             "table_counts": dict(self.table_counts),
         }
+        if self.ev_calibration_config is not None and self.ev_calibration_config.enabled:
+            summary["ev_by_count_bucket_and_bet"] = self.ev_bucket_action_table.summary(
+                compute_confidence_intervals=self.ev_calibration_config.compute_confidence_intervals,
+                confidence_z=self.ev_calibration_config.confidence_z,
+            )
+            summary["ev_calibration_min_samples_to_report"] = float(
+                self.ev_calibration_config.min_samples_to_report
+            )
+        return summary

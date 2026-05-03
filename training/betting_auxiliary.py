@@ -11,6 +11,7 @@ from enviroment_bj.core import BET_ACTION_ORDER, CARD_RANKS
 from model.agents.common import apply_action_mask
 
 from .config import BettingAuxiliaryConfig
+from .count_utils import COUNT_BUCKET_NAMES as COUNT_PROXY_BUCKET_NAMES, count_proxy_bucket_name as bucket_name_from_proxy
 
 
 HI_LO_WEIGHTS = {
@@ -30,7 +31,6 @@ HI_LO_WEIGHTS = {
 }
 HI_LO_VECTOR = torch.tensor([HI_LO_WEIGHTS[rank] for rank in CARD_RANKS], dtype=torch.float32)
 TEN_SLOT_RANKS = ("A", "2", "3", "4", "5", "6", "7", "8", "9", "10")
-COUNT_PROXY_BUCKET_NAMES = ("low", "medium", "high", "very_high")
 
 
 def _sequence_to_rank_count_mapping(values: Sequence[Any]) -> dict[str, float] | None:
@@ -169,12 +169,32 @@ def map_count_proxy_to_bet_target(
     threshold_2x: float,
     threshold_3x: float,
     threshold_4x: float,
+    bet_multipliers: tuple[int, ...] = (1, 2, 3, 4),
 ) -> torch.Tensor:
     target = torch.zeros_like(true_count_proxy, dtype=torch.long)
-    target = torch.where(true_count_proxy >= threshold_2x, torch.ones_like(target), target)
-    target = torch.where(true_count_proxy >= threshold_3x, torch.full_like(target, 2), target)
-    target = torch.where(true_count_proxy >= threshold_4x, torch.full_like(target, 3), target)
+    if 2 in bet_multipliers:
+        target = torch.where(
+            true_count_proxy >= threshold_2x,
+            torch.full_like(target, bet_multipliers.index(2)),
+            target,
+        )
+    if 3 in bet_multipliers:
+        target = torch.where(
+            true_count_proxy >= threshold_3x,
+            torch.full_like(target, bet_multipliers.index(3)),
+            target,
+        )
+    if 4 in bet_multipliers:
+        target = torch.where(
+            true_count_proxy >= threshold_4x,
+            torch.full_like(target, bet_multipliers.index(4)),
+            target,
+        )
     return target
+
+
+def _available_bet_indices(bet_multipliers: tuple[int, ...]) -> list[int]:
+    return [int(multiplier) - 1 for multiplier in bet_multipliers]
 
 
 def clamp_target_to_legal_bet(target: torch.Tensor, bet_mask: torch.Tensor) -> torch.Tensor:
@@ -213,6 +233,9 @@ def compute_betting_count_proxy_ce_loss(
     q_values = student_output["q_values"]
     bet_q_values = q_values[..., betting_action_slice]
     bet_mask = action_mask[..., betting_action_slice].to(torch.bool)
+    available_bet_indices = _available_bet_indices(config.bet_multipliers)
+    bet_q_values = bet_q_values[..., available_bet_indices]
+    bet_mask = bet_mask[..., available_bet_indices]
 
     true_count_proxy = betting_auxiliary["true_count_proxy"].to(device=q_values.device, dtype=torch.float32)
     observed_cards = betting_auxiliary["observed_cards"].to(device=q_values.device, dtype=torch.long)
@@ -222,6 +245,7 @@ def compute_betting_count_proxy_ce_loss(
         threshold_2x=config.threshold_2x,
         threshold_3x=config.threshold_3x,
         threshold_4x=config.threshold_4x,
+        bet_multipliers=config.bet_multipliers,
     )
     target = clamp_target_to_legal_bet(target, bet_mask)
 
@@ -245,13 +269,12 @@ def compute_betting_count_proxy_ce_loss(
 
 
 def count_proxy_bucket_name(true_count_proxy: float, config: BettingAuxiliaryConfig) -> str:
-    if true_count_proxy < config.threshold_2x:
-        return "low"
-    if true_count_proxy < config.threshold_3x:
-        return "medium"
-    if true_count_proxy < config.threshold_4x:
-        return "high"
-    return "very_high"
+    return bucket_name_from_proxy(
+        true_count_proxy,
+        threshold_medium=config.threshold_2x,
+        threshold_high=config.threshold_3x,
+        threshold_very_high=config.threshold_4x,
+    )
 
 
 @dataclass(slots=True)
@@ -289,16 +312,22 @@ class BettingAuxiliaryEvaluationTracker:
             threshold_2x=config.threshold_2x,
             threshold_3x=config.threshold_3x,
             threshold_4x=config.threshold_4x,
+            bet_multipliers=config.bet_multipliers,
         )
-        target = clamp_target_to_legal_bet(target, bet_mask.unsqueeze(0))
-        target_action = BET_ACTION_ORDER[int(target.item())]
+        available_bet_indices = _available_bet_indices(config.bet_multipliers)
+        available_bet_mask = bet_mask[available_bet_indices]
+        target = clamp_target_to_legal_bet(target, available_bet_mask.unsqueeze(0))
+        target_action = BET_ACTION_ORDER[available_bet_indices[int(target.item())]]
 
         self.proxy_values.append(true_count_proxy)
         self.target_counts[target_action] += 1
         self.bucket_state_counts[bucket] += 1
 
-        masked_bet_q = apply_action_mask(bet_q_values.unsqueeze(0), bet_mask.unsqueeze(0)).squeeze(0)
-        greedy_index = int(masked_bet_q.argmax(dim=-1).item())
+        masked_bet_q = apply_action_mask(
+            bet_q_values[available_bet_indices].unsqueeze(0),
+            available_bet_mask.unsqueeze(0),
+        ).squeeze(0)
+        greedy_index = available_bet_indices[int(masked_bet_q.argmax(dim=-1).item())]
         self.bucket_greedy_counts[bucket][BET_ACTION_ORDER[greedy_index]] += 1
 
         q_bet_1x: float | None = None

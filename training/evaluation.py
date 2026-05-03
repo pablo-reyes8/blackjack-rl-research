@@ -10,7 +10,7 @@ import torch
 from enviroment_bj.core import ACTION_ORDER, BET_ACTION_ORDER
 
 from .betting_auxiliary import BettingAuxiliaryEvaluationTracker, compute_observed_hi_lo_proxy_from_response
-from .config import BettingAuxiliaryConfig, CountAuxiliaryConfig
+from .config import BettingAuxiliaryConfig, CountAuxiliaryConfig, EVCalibrationDiagnosticsConfig
 from .count_auxiliary import CountAuxiliaryEvaluationTracker
 from .metrics import BehaviorMetricsTracker
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
@@ -34,11 +34,12 @@ def evaluate_policy(
     reset_hidden_on_round_end: bool,
     betting_auxiliary_config: BettingAuxiliaryConfig | None = None,
     count_auxiliary_config: CountAuxiliaryConfig | None = None,
+    ev_calibration_config: EVCalibrationDiagnosticsConfig | None = None,
     progress_every_n_rounds: int | None = None,
     progress_callback: Callable[[dict[str, Any], int, int], None] | None = None,
 ) -> dict[str, Any]:
     model.eval()
-    tracker = BehaviorMetricsTracker()
+    tracker = BehaviorMetricsTracker(ev_calibration_config=ev_calibration_config)
     env_states = [EvaluationEnvState(env=env) for env in envs]
     is_recurrent = model.config.architecture != "feedforward"
     decisions = 0
@@ -177,6 +178,7 @@ def evaluate_policy(
                     was_random=was_random,
                     table_key=table_key,
                     env_key=str(id(env_state.env)),
+                    n_decks=int(getattr(env_state.env.config, "n_decks", 8)),
                 )
                 tracker.record_round_result(next_response, env_key=str(id(env_state.env)))
                 decisions += 1

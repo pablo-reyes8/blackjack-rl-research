@@ -26,8 +26,10 @@ from training import (
     DistillationConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
+    EVCalibrationDiagnosticsConfig,
     EvaluationConfig,
     NStepConfig,
+    ObservedEVRankingConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -215,6 +217,12 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
     count_auxiliary = CountAuxiliaryConfig(
         **_ensure_mapping(values.get("count_auxiliary"), context="training.count_auxiliary")
     )
+    ev_calibration_diagnostics = EVCalibrationDiagnosticsConfig(
+        **_ensure_mapping(values.get("ev_calibration_diagnostics"), context="training.ev_calibration_diagnostics")
+    )
+    observed_ev_ranking = ObservedEVRankingConfig(
+        **_ensure_mapping(values.get("observed_ev_ranking"), context="training.observed_ev_ranking")
+    )
     transfer_data = _ensure_mapping(values.get("transfer"), context="training.transfer")
     distillation = DistillationConfig(
         **_ensure_mapping(transfer_data.pop("distillation", None), context="training.transfer.distillation")
@@ -233,6 +241,8 @@ def build_training_pipeline_config(data: Mapping[str, Any] | None = None) -> Tra
         checkpoints=checkpoints,
         betting_auxiliary=betting_auxiliary,
         count_auxiliary=count_auxiliary,
+        ev_calibration_diagnostics=ev_calibration_diagnostics,
+        observed_ev_ranking=observed_ev_ranking,
         transfer=transfer,
         prints=prints,
     )

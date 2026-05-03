@@ -13,10 +13,11 @@ from model.agents import DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, Recurr
 
 from .checkpoints import CheckpointManager
 from .betting_auxiliary import compute_observed_hi_lo_proxy_from_response
-from .config import TrainingPipelineConfig
+from .config import EVCalibrationDiagnosticsConfig, TrainingPipelineConfig
 from .env_factory import clone_environments, normalize_envs
 from .epsilon import DualEpsilonScheduler
 from .evaluation import evaluate_policy
+from .ev_calibration import EVBucketActionTable
 from .logging import TrainingLogger
 from .metrics import BehaviorMetricsTracker, ScalarMetricAccumulator
 from .policy import action_name_from_index, infer_decision_phase, resolve_epsilon_value, select_epsilon_greedy_action
@@ -72,6 +73,7 @@ class BlackjackRLTrainer:
         self.env_step_count = 0
         self.update_count = 0
         self.best_eval_metrics: dict[str, Any] | None = None
+        self.ev_bucket_action_table = EVBucketActionTable()
         self.training_history: list[dict[str, Any]] = []
         self._set_env_runtime_mode(enable_transition_recording=False)
         torch.manual_seed(self.pipeline_config.trainer.seed)
@@ -104,7 +106,7 @@ class BlackjackRLTrainer:
             teacher_state = encode_teacher_state(self.teacher_model, response)
             output["teacher_state_vector"] = teacher_state["state_vector"]
             output["teacher_action_mask"] = teacher_state["action_mask"]
-        if self.pipeline_config.betting_auxiliary.enabled or self.pipeline_config.count_auxiliary.enabled:
+        if self._needs_count_proxy_features():
             n_decks = getattr(getattr(env, "config", None), "n_decks", 8)
             auxiliary = compute_observed_hi_lo_proxy_from_response(response, n_decks=int(n_decks))
             output["betting_auxiliary"] = {
@@ -202,8 +204,29 @@ class BlackjackRLTrainer:
     def _buffer_ready(self) -> bool:
         return len(self.replay_buffer) >= self.pipeline_config.replay_buffer.warmup_size and self.replay_buffer.can_sample()
 
+    def _needs_count_proxy_features(self) -> bool:
+        return (
+            self.pipeline_config.betting_auxiliary.enabled
+            or self.pipeline_config.count_auxiliary.enabled
+            or self.pipeline_config.ev_calibration_diagnostics.enabled
+            or self.pipeline_config.observed_ev_ranking.enabled
+        )
+
+    def _behavior_ev_calibration_config(self) -> EVCalibrationDiagnosticsConfig:
+        if self.pipeline_config.ev_calibration_diagnostics.enabled:
+            return self.pipeline_config.ev_calibration_diagnostics
+        ranking = self.pipeline_config.observed_ev_ranking
+        return EVCalibrationDiagnosticsConfig(
+            enabled=ranking.enabled,
+            threshold_medium=ranking.threshold_medium,
+            threshold_high=ranking.threshold_high,
+            threshold_very_high=ranking.threshold_very_high,
+            min_observed_cards=ranking.min_observed_cards,
+            betting_phase_only=ranking.betting_phase_only,
+        )
+
     def warmup(self) -> dict[str, Any]:
-        tracker = BehaviorMetricsTracker()
+        tracker = BehaviorMetricsTracker(ev_calibration_config=self._behavior_ev_calibration_config())
         while len(self.replay_buffer) < self.pipeline_config.replay_buffer.warmup_size:
             self.collect_experience(num_steps=1, tracker=tracker, epsilon=1.0)
             self.logger.log_warmup(buffer_size=len(self.replay_buffer), target_size=self.pipeline_config.replay_buffer.warmup_size)
@@ -293,6 +316,11 @@ class BlackjackRLTrainer:
             "count_auxiliary_weight": self.pipeline_config.count_auxiliary.weight,
             "count_auxiliary_final_weight": self.pipeline_config.count_auxiliary.final_weight,
             "count_auxiliary_min_observed_cards": self.pipeline_config.count_auxiliary.min_observed_cards,
+            "ev_calibration_diagnostics_enabled": self.pipeline_config.ev_calibration_diagnostics.enabled,
+            "ev_calibration_min_observed_cards": self.pipeline_config.ev_calibration_diagnostics.min_observed_cards,
+            "observed_ev_ranking_enabled": self.pipeline_config.observed_ev_ranking.enabled,
+            "observed_ev_ranking_weight": self.pipeline_config.observed_ev_ranking.weight,
+            "observed_ev_ranking_final_weight": self.pipeline_config.observed_ev_ranking.final_weight,
             "n_decks": reference_env.config.n_decks,
             "shoe_penetration": reference_env.config.shoe_penetration,
             "dealer_hits_soft_17": reference_env.config.dealer_hits_soft_17,
@@ -409,6 +437,7 @@ class BlackjackRLTrainer:
                         was_random=was_random,
                         table_key=table_key,
                         env_key=str(env_index),
+                        n_decks=int(getattr(env_state.env.config, "n_decks", 8)),
                     )
                     tracker.record_round_result(next_response, env_key=str(env_index))
                     self.env_step_count += 1
@@ -482,6 +511,8 @@ class BlackjackRLTrainer:
             distillation_config=self.pipeline_config.transfer.distillation,
             betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
             count_auxiliary_config=self.pipeline_config.count_auxiliary,
+            observed_ev_ranking_config=self.pipeline_config.observed_ev_ranking,
+            ev_bucket_action_table=self.ev_bucket_action_table,
             update_count=self.update_count,
         )
         self.update_count += 1
@@ -518,6 +549,7 @@ class BlackjackRLTrainer:
             reset_hidden_on_round_end=self.pipeline_config.trainer.reset_hidden_on_round_end,
             betting_auxiliary_config=self.pipeline_config.betting_auxiliary,
             count_auxiliary_config=self.pipeline_config.count_auxiliary,
+            ev_calibration_config=self._behavior_ev_calibration_config(),
         )
 
     def train_one_epoch(self) -> dict[str, Any]:
@@ -530,7 +562,7 @@ class BlackjackRLTrainer:
         if not self._buffer_ready():
             self.warmup()
 
-        behavior_tracker = BehaviorMetricsTracker()
+        behavior_tracker = BehaviorMetricsTracker(ev_calibration_config=self._behavior_ev_calibration_config())
         optimization_tracker = ScalarMetricAccumulator()
         updates_this_epoch = 0
         total_updates_this_epoch = self._estimated_updates_this_epoch()
@@ -575,6 +607,8 @@ class BlackjackRLTrainer:
         self._flush_pending_sequences()
 
         train_metrics = behavior_tracker.summary()
+        if self.pipeline_config.ev_calibration_diagnostics.enabled or self.pipeline_config.observed_ev_ranking.enabled:
+            self.ev_bucket_action_table = behavior_tracker.ev_bucket_action_table
         optimization_metrics = optimization_tracker.summary()
         epoch_summary = {
             **train_metrics,

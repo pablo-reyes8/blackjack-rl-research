@@ -48,11 +48,11 @@ The stack is intentionally built from the ground up—bypassing high-level abstr
 ## Why this repository stands out
 
 - **Beyond a single hand:** Blackjack is treated as a continuous, sequential decision-making problem under true uncertainty.
-- **Integrated Betting Optimization:** Betting is no longer assumed; it is part of the learning objective. Every round begins in a betting phase, requiring the agent to learn *how much* to risk alongside *how* to play.
+- **Integrated Betting Optimization:** Betting is no longer assumed; it is part of the learning objective. Every round begins in a betting phase, requiring the agent to learn *how much* to risk alongside *how* to play, with optional safeguards that decouple bet-size features from the playing head.
 - **Advanced Table Dynamics:** Supports realistic casino constraints including split depth limits, doubles, surrender, insurance, multi-deck shoes, dealer peek behavior, cut-card reshuffle logic, and optional six-card charlie.
 - **Observation as a Research Surface:** Seamlessly switch between compact basic-strategy-style inputs and simulator-level, fully observable states.
 - **Sophisticated Agent Architectures:** Out-of-the-box support for feedforward, recurrent, and dueling recurrent Double DQN agents, utilizing separate betting and playing heads over a shared representational trunk.
-- **Robust Training Pipeline:** Features dual epsilon scheduling by phase, replay buffers, optional n-step returns, phase-weighted loss, target-network updates, strict checkpoint management, and auxiliary betting losses.
+- **Robust Training Pipeline:** Features dual epsilon scheduling by phase, replay buffers, optional n-step returns, phase-weighted loss, target-network updates, strict checkpoint management, auxiliary betting losses, and optional EV calibration diagnostics.
 - **Stage-Based Optimization:** The high-level wrapper supports progressive multi-stage training, warm starts, checkpoint reuse, and controlled transitions from playing-focused stages into betting-focused stages.
 - **Transfer Learning & Distillation:** The project supports warm-start initialization plus teacher-student distillation to preserve strong playing behavior while adapting new capabilities such as betting.
 - **Production-Ready Hygiene:** Packaged for a clean first public push: `README`, `pyproject.toml`, Docker, GitHub Actions, YAML presets, requirements files, scripts, license, and repo hygiene files.
@@ -61,7 +61,7 @@ The stack is intentionally built from the ground up—bypassing high-level abstr
 
 ## Current status & Capabilities
 
-The core blackjack environment is fully implemented, bypassing standard abstractions to natively model the game as a two-stage decision process: **Betting** (`1x`, `2x`, `3x`, `4x`) and **Playing** (`stand`, `hit`, `double`, `split`, `surrender`, `insurance`). 
+The core blackjack environment is fully implemented, bypassing standard abstractions to natively model the game as a two-stage decision process: **Betting** with configurable spreads such as `(1x)`, `(1x, 2x)`, `(1x, 2x, 3x)`, or `(1x, 2x, 3x, 4x)`, and **Playing** (`stand`, `hit`, `double`, `split`, `surrender`, `insurance`). 
 
 The current codebase already supports iterative training workflows where the agent is first stabilized on playing behavior and then upgraded through staged transfer runs. The retained checkpoints under `outputs/models/` reflect that progression:
 
@@ -87,8 +87,8 @@ In practical terms, the agent has already learned a solid playing policy under r
 * **Observation Profiles:** Ranging from `minimal_basic_strategy` (compact features), to `table_realistic` (partial visibility with or without shoe progress), up to a `fully_observable_sim` (research-only God-view for theoretical bounds).
 
 **⚡ Training Pipeline**
-* **Phase-Aware Optimization:** Separate betting/playing heads, module gating, and dual epsilon exploration schedules.
-* **Loss & Replay:** Standard Double DQN targets, optional $n$-step returns, phase-weighted TD loss, temporal replay buffers, and optional betting auxiliary losses.
+* **Phase-Aware Optimization:** Separate betting/playing heads, optional bet-feature masking for playing, module gating, and dual epsilon exploration schedules.
+* **Loss & Replay:** Standard Double DQN targets, optional $n$-step returns, phase-weighted TD loss, temporal replay buffers, optional betting/count auxiliary losses, and conservative observed-EV ranking support.
 * **Transfer & Distillation:** Warm-start loading, teacher checkpoints, and stage-specific distillation to protect previously learned playing behavior.
 * **Reproducibility:** Driven by YAML presets, strict checkpointing, stage-aware wrappers, and dedicated CLI workflows (`describe`, `train`, `evaluate`).
 
@@ -172,6 +172,7 @@ Training output is phase-aware now. During a run the trainer prints, in a compac
 - loss and TD error split by phase
 - distillation loss and auxiliary betting loss when enabled
 - betting action frequencies and bet EV-style summaries
+- EV calibration by count bucket and bet action when enabled
 - mean Q-values for betting actions and aggressive-vs-conservative betting margins
 - playing action frequencies
 - total reward and EV summaries for train and evaluation

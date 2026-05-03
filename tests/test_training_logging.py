@@ -163,6 +163,15 @@ class TrainingLoggingTests(unittest.TestCase):
                     "bet_action_frequencies": {"bet_1x": 0.6, "bet_2x": 0.2, "bet_3x": 0.1, "bet_4x": 0.1},
                     "play_action_frequencies": {"stand": 0.45, "hit": 0.25, "double": 0.1, "split": 0.1, "surrender": 0.05, "insurance": 0.05},
                     "bet_ev_per_1000_rounds_by_action": {"bet_1x": 15.0, "bet_2x": 30.0, "bet_3x": 5.0, "bet_4x": -10.0},
+                    "ev_calibration_min_samples_to_report": 10,
+                    "ev_by_count_bucket_and_bet": {
+                        "high": {
+                            "bet_1x": {"n": 20, "ev_per_1000": -30.0},
+                            "bet_2x": {"n": 25, "ev_per_1000": 12.5},
+                            "bet_3x": {"n": 4, "ev_per_1000": 80.0},
+                            "bet_4x": {"n": 0, "ev_per_1000": 0.0},
+                        }
+                    },
                     "mean_q_bet_1x": 0.12,
                     "mean_q_bet_2x": 0.03,
                     "mean_q_bet_3x": -0.04,
@@ -232,6 +241,8 @@ class TrainingLoggingTests(unittest.TestCase):
         self.assertIn("mean_q_bet_1x=+0.1200", output)
         self.assertIn("mean_q_bet_4x=-0.0800", output)
         self.assertIn("mean_margin_best_aggressive_vs_1x=-0.0900", output)
+        self.assertIn("EV Buckets", output)
+        self.assertIn("high      bet_1x:-30.0(n=20) bet_2x:+12.5(n=25)", output)
         self.assertIn("proxy_mean=+1.350", output)
         self.assertIn("target bet_1x:0.45 bet_2x:0.25 bet_3x:0.20 bet_4x:0.10", output)
         self.assertIn("high      n=18", output)

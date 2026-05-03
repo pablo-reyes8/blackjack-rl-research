@@ -45,6 +45,29 @@ class TrainingLogger:
             return "n/a"
         return " ".join(f"{action}:{float(values.get(action, 0.0)):+.1f}" for action in BET_ACTION_ORDER)
 
+    def _format_ev_calibration(self, metrics: dict[str, Any]) -> list[str]:
+        table = metrics.get("ev_by_count_bucket_and_bet")
+        if not isinstance(table, dict):
+            return []
+        min_samples = int(metrics.get("ev_calibration_min_samples_to_report", 0))
+        lines: list[str] = ["  EV Buckets:"]
+        for bucket_name in ("low", "medium", "high", "very_high"):
+            bucket = table.get(bucket_name)
+            if not isinstance(bucket, dict):
+                continue
+            cells: list[str] = []
+            for action_name in BET_ACTION_ORDER:
+                stats = bucket.get(action_name)
+                if not isinstance(stats, dict):
+                    continue
+                n = int(stats.get("n", 0))
+                if n < min_samples:
+                    continue
+                cells.append(f"{action_name}:{float(stats.get('ev_per_1000', 0.0)):+.1f}(n={n})")
+            if cells:
+                lines.append(f"           {bucket_name:<9} " + " ".join(cells))
+        return lines if len(lines) > 1 else []
+
     def _has_multiple_bet_multipliers(self, metrics: dict[str, Any]) -> bool:
         multipliers = metrics.get("available_bet_multipliers")
         if isinstance(multipliers, (list, tuple, set)):
@@ -215,6 +238,11 @@ class TrainingLogger:
                 f"enabled={summary.get('count_auxiliary_enabled', False)} | mode={summary.get('count_auxiliary_mode')} | "
                 f"weight={summary.get('count_auxiliary_weight', 0.0):.3f}->{summary.get('count_auxiliary_final_weight', 0.0):.3f} | "
                 f"min_obs={int(summary.get('count_auxiliary_min_observed_cards', 0))}",
+                "  EV Tools   : "
+                f"diag={summary.get('ev_calibration_diagnostics_enabled', False)} "
+                f"(min_obs={int(summary.get('ev_calibration_min_observed_cards', 0))}) | "
+                f"rank={summary.get('observed_ev_ranking_enabled', False)} "
+                f"({summary.get('observed_ev_ranking_weight', 0.0):.4f}->{summary.get('observed_ev_ranking_final_weight', 0.0):.4f})",
                 "  Eval / CKPT: "
                 f"eval_rounds={int(summary.get('eval_rounds', 0))} | eval_decisions={int(summary.get('eval_max_decisions', 0))} | "
                 f"checkpoints={summary.get('checkpoint_dir')}",
@@ -255,7 +283,8 @@ class TrainingLogger:
                 f"n_step={metrics.get('mean_n_steps', 1.0):.2f} | phase_w={metrics.get('mean_phase_weight', 1.0):.2f} | "
                 f"distill={metrics.get('distillation_loss', 0.0):.6f} @ {metrics.get('distillation_weight', 0.0):.3f} | "
                 f"bet_aux={metrics.get('bet_aux_loss', 0.0):.6f} @ {metrics.get('bet_aux_weight', 0.0):.3f} | "
-                f"count_aux={metrics.get('count_aux_loss', 0.0):.6f} @ {metrics.get('count_aux_weight', 0.0):.3f}",
+                f"count_aux={metrics.get('count_aux_loss', 0.0):.6f} @ {metrics.get('count_aux_weight', 0.0):.3f} | "
+                f"ev_rank={metrics.get('ev_rank_loss', 0.0):.6f} @ {metrics.get('ev_rank_weight', 0.0):.3f}",
             ],
         )
 
@@ -301,7 +330,8 @@ class TrainingLogger:
                 f"eps_bet={summary.get('epsilon_betting', 0.0):.4f} | eps_play={summary.get('epsilon_playing', 0.0):.4f} | "
                 f"lr={summary.get('learning_rate', 0.0):.2e} | grad={summary.get('grad_norm', 0.0):.4f} | "
                 f"bet_aux={summary.get('bet_aux_loss', 0.0):.6f} @ {summary.get('bet_aux_weight', 0.0):.3f} | "
-                f"count_aux={summary.get('count_aux_loss', 0.0):.6f} @ {summary.get('count_aux_weight', 0.0):.3f}",
+                f"count_aux={summary.get('count_aux_loss', 0.0):.6f} @ {summary.get('count_aux_weight', 0.0):.3f} | "
+                f"ev_rank={summary.get('ev_rank_loss', 0.0):.6f} @ {summary.get('ev_rank_weight', 0.0):.3f}",
                 "  Outcomes: "
                 f"win={summary.get('win_rate', 0.0):.4f} | push={summary.get('push_rate', 0.0):.4f} | loss={summary.get('loss_rate', 0.0):.4f} | blackjack={summary.get('blackjack_rate', 0.0):.4f} | bust={summary.get('bust_rate', 0.0):.4f}",
                 "  Betting : "
@@ -336,6 +366,7 @@ class TrainingLogger:
             "           bet_EV " + self._format_bet_ev(metrics),
         ]
         lines.extend(self._format_bet_q_diagnostics(metrics))
+        lines.extend(self._format_ev_calibration(metrics))
         lines.extend(self._format_betting_auxiliary_eval(metrics))
         lines.extend(self._format_count_auxiliary_eval(metrics))
         lines.extend(

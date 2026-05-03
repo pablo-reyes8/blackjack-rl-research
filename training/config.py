@@ -191,7 +191,7 @@ class BettingAuxiliaryConfig:
     min_observed_cards: int = 12
     betting_phase_only: bool = True
     bet_multipliers: tuple[int, ...] = (1, 2, 3, 4)
-    class_weights: tuple[float, float, float, float] | None = None
+    class_weights: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.mode != "count_proxy_ce":
@@ -205,14 +205,22 @@ class BettingAuxiliaryConfig:
         if self.min_observed_cards < 0:
             raise ValueError("min_observed_cards must be non-negative")
         self.bet_multipliers = tuple(int(multiplier) for multiplier in self.bet_multipliers)
+        if not self.bet_multipliers:
+            raise ValueError("bet_multipliers must be non-empty")
+        if self.bet_multipliers[0] != 1:
+            raise ValueError("bet_multipliers must start at 1")
+        if tuple(sorted(self.bet_multipliers)) != self.bet_multipliers:
+            raise ValueError("bet_multipliers must be sorted increasing")
+        if len(set(self.bet_multipliers)) != len(self.bet_multipliers):
+            raise ValueError("bet_multipliers must be unique")
+        if any(multiplier not in (1, 2, 3, 4) for multiplier in self.bet_multipliers):
+            raise ValueError("Only multipliers 1, 2, 3, 4 are currently supported")
         if self.class_weights is not None:
             self.class_weights = tuple(float(weight) for weight in self.class_weights)
-            if len(self.class_weights) != 4:
-                raise ValueError("class_weights must have length 4: bet_1x, bet_2x, bet_3x, bet_4x")
+            if len(self.class_weights) != len(self.bet_multipliers):
+                raise ValueError("class_weights length must match len(bet_multipliers)")
             if any(weight < 0 for weight in self.class_weights):
                 raise ValueError("class_weights must be non-negative")
-        if self.enabled and self.bet_multipliers != (1, 2, 3, 4):
-            raise ValueError("Betting auxiliary mode currently requires bet_multipliers=(1, 2, 3, 4)")
 
 
 @dataclass(slots=True)
@@ -250,6 +258,68 @@ class CountAuxiliaryConfig:
                 raise ValueError("class_weights must have length 4: low, medium, high, very_high")
             if any(weight < 0 for weight in self.class_weights):
                 raise ValueError("class_weights must be non-negative")
+
+
+@dataclass(slots=True)
+class EVCalibrationDiagnosticsConfig:
+    enabled: bool = False
+    threshold_medium: float = 1.0
+    threshold_high: float = 2.0
+    threshold_very_high: float = 4.0
+    min_observed_cards: int = 20
+    betting_phase_only: bool = True
+    compute_confidence_intervals: bool = True
+    confidence_z: float = 1.96
+    min_samples_to_report: int = 10
+
+    def __post_init__(self) -> None:
+        if not (self.threshold_medium <= self.threshold_high <= self.threshold_very_high):
+            raise ValueError("thresholds must satisfy threshold_medium <= threshold_high <= threshold_very_high")
+        if self.min_observed_cards < 0:
+            raise ValueError("min_observed_cards must be non-negative")
+        if self.confidence_z < 0:
+            raise ValueError("confidence_z must be non-negative")
+        if self.min_samples_to_report < 0:
+            raise ValueError("min_samples_to_report must be non-negative")
+
+
+@dataclass(slots=True)
+class ObservedEVRankingConfig:
+    enabled: bool = False
+    weight: float = 0.0
+    final_weight: float = 0.0
+    decay_steps: int = 50_000
+    margin: float = 0.05
+    threshold_medium: float = 1.0
+    threshold_high: float = 2.0
+    threshold_very_high: float = 4.0
+    min_observed_cards: int = 20
+    betting_phase_only: bool = True
+    min_bucket_action_samples: int = 30
+    refresh_interval_updates: int = 1_000
+    compare_against_1x_only: bool = True
+    min_ev_gap_per_round: float = 0.005
+    max_pairs_per_batch: int = 512
+
+    def __post_init__(self) -> None:
+        if self.weight < 0 or self.final_weight < 0:
+            raise ValueError("weights must be non-negative")
+        if self.decay_steps <= 0:
+            raise ValueError("decay_steps must be positive")
+        if self.margin < 0:
+            raise ValueError("margin must be non-negative")
+        if not (self.threshold_medium <= self.threshold_high <= self.threshold_very_high):
+            raise ValueError("thresholds must satisfy threshold_medium <= threshold_high <= threshold_very_high")
+        if self.min_observed_cards < 0:
+            raise ValueError("min_observed_cards must be non-negative")
+        if self.min_bucket_action_samples <= 0:
+            raise ValueError("min_bucket_action_samples must be positive")
+        if self.refresh_interval_updates <= 0:
+            raise ValueError("refresh_interval_updates must be positive")
+        if self.min_ev_gap_per_round < 0:
+            raise ValueError("min_ev_gap_per_round must be non-negative")
+        if self.max_pairs_per_batch <= 0:
+            raise ValueError("max_pairs_per_batch must be positive")
 
 
 @dataclass(slots=True)
@@ -318,6 +388,8 @@ class TrainingPipelineConfig:
     checkpoints: CheckpointConfig = field(default_factory=CheckpointConfig)
     betting_auxiliary: BettingAuxiliaryConfig = field(default_factory=BettingAuxiliaryConfig)
     count_auxiliary: CountAuxiliaryConfig = field(default_factory=CountAuxiliaryConfig)
+    ev_calibration_diagnostics: EVCalibrationDiagnosticsConfig = field(default_factory=EVCalibrationDiagnosticsConfig)
+    observed_ev_ranking: ObservedEVRankingConfig = field(default_factory=ObservedEVRankingConfig)
     transfer: TransferLearningConfig = field(default_factory=TransferLearningConfig)
     prints: PrintConfig = field(default_factory=PrintConfig)
 
@@ -332,6 +404,10 @@ class TrainingPipelineConfig:
             raise TypeError("betting_auxiliary must be a BettingAuxiliaryConfig instance")
         if not isinstance(self.count_auxiliary, CountAuxiliaryConfig):
             raise TypeError("count_auxiliary must be a CountAuxiliaryConfig instance")
+        if not isinstance(self.ev_calibration_diagnostics, EVCalibrationDiagnosticsConfig):
+            raise TypeError("ev_calibration_diagnostics must be an EVCalibrationDiagnosticsConfig instance")
+        if not isinstance(self.observed_ev_ranking, ObservedEVRankingConfig):
+            raise TypeError("observed_ev_ranking must be an ObservedEVRankingConfig instance")
         if not isinstance(self.transfer, TransferLearningConfig):
             raise TypeError("transfer must be a TransferLearningConfig instance")
 
@@ -345,6 +421,8 @@ class TrainingPipelineConfig:
         epsilon_config = data.get("epsilon", {})
         betting_auxiliary_config = BettingAuxiliaryConfig(**data.get("betting_auxiliary", {}))
         count_auxiliary_config = CountAuxiliaryConfig(**data.get("count_auxiliary", {}))
+        ev_calibration_diagnostics_config = EVCalibrationDiagnosticsConfig(**data.get("ev_calibration_diagnostics", {}))
+        observed_ev_ranking_config = ObservedEVRankingConfig(**data.get("observed_ev_ranking", {}))
         transfer_config = dict(data.get("transfer", {}))
         distillation_config = DistillationConfig(**transfer_config.pop("distillation", {}))
         return cls(
@@ -361,6 +439,8 @@ class TrainingPipelineConfig:
             checkpoints=CheckpointConfig(**data.get("checkpoints", {})),
             betting_auxiliary=betting_auxiliary_config,
             count_auxiliary=count_auxiliary_config,
+            ev_calibration_diagnostics=ev_calibration_diagnostics_config,
+            observed_ev_ranking=observed_ev_ranking_config,
             transfer=TransferLearningConfig(distillation=distillation_config, **transfer_config),
             prints=PrintConfig(**data.get("prints", {})),
         )

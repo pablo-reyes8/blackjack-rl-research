@@ -31,11 +31,15 @@ from enviroment_bj import BlackjackConfig, BlackjackEnvironment, ObservationConf
 from loss import BellmanLossConfig  # noqa: E402
 from model.agents import AgentNetworkConfig, DuelingRecurrentDoubleDQN, FeedForwardDoubleDQN, RecurrentDoubleDQN  # noqa: E402
 from training import (  # noqa: E402
+    BettingAuxiliaryConfig,
     CheckpointConfig,
+    CountAuxiliaryConfig,
     DualEpsilonConfig,
     EpsilonScheduleConfig,
+    EVCalibrationDiagnosticsConfig,
     EvaluationConfig,
     NStepConfig,
+    ObservedEVRankingConfig,
     OptimizationConfig,
     PrintConfig,
     ReplayBufferConfig,
@@ -164,6 +168,10 @@ def _build_pipeline_config(spec: dict[str, Any], output_dir: Path) -> TrainingPi
         target_update=TargetUpdateConfig(**target_update_data),
         evaluation=EvaluationConfig(**evaluation_data),
         checkpoints=CheckpointConfig(**checkpoint_data),
+        betting_auxiliary=BettingAuxiliaryConfig(**training.get("betting_auxiliary", {})),
+        count_auxiliary=CountAuxiliaryConfig(**training.get("count_auxiliary", {})),
+        ev_calibration_diagnostics=EVCalibrationDiagnosticsConfig(**training.get("ev_calibration_diagnostics", {})),
+        observed_ev_ranking=ObservedEVRankingConfig(**training.get("observed_ev_ranking", {})),
         prints=PrintConfig(**print_data),
     )
 

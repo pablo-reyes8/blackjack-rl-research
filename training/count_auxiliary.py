@@ -7,8 +7,8 @@ from typing import Any, Mapping
 import torch
 import torch.nn.functional as F
 
-from .betting_auxiliary import COUNT_PROXY_BUCKET_NAMES
 from .config import CountAuxiliaryConfig
+from .count_utils import COUNT_BUCKET_NAMES as COUNT_PROXY_BUCKET_NAMES, map_count_proxy_to_bucket
 
 
 def count_auxiliary_weight(config: CountAuxiliaryConfig, update_count: int) -> float:
@@ -23,11 +23,12 @@ def map_count_proxy_to_count_bucket(
     threshold_high: float,
     threshold_very_high: float,
 ) -> torch.Tensor:
-    target = torch.zeros_like(true_count_proxy, dtype=torch.long)
-    target = torch.where(true_count_proxy >= threshold_medium, torch.ones_like(target), target)
-    target = torch.where(true_count_proxy >= threshold_high, torch.full_like(target, 2), target)
-    target = torch.where(true_count_proxy >= threshold_very_high, torch.full_like(target, 3), target)
-    return target
+    return map_count_proxy_to_bucket(
+        true_count_proxy,
+        threshold_medium=threshold_medium,
+        threshold_high=threshold_high,
+        threshold_very_high=threshold_very_high,
+    )
 
 
 def compute_count_bucket_ce_loss(
