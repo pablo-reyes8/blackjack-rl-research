@@ -25,6 +25,8 @@ class AgentNetworkConfig:
     use_count_auxiliary_head: bool = False
     count_auxiliary_hidden_dim: int = 128
     count_auxiliary_num_buckets: int = 4
+    mask_bet_features_for_playing: bool = False
+    play_feature_mask_module_names: tuple[str, ...] = ("bet", "betting_context")
 
     def __post_init__(self) -> None:
         if self.architecture not in {"feedforward", "recurrent", "dueling_recurrent"}:
@@ -49,6 +51,12 @@ class AgentNetworkConfig:
             raise ValueError("count_auxiliary_hidden_dim must be positive")
         if self.count_auxiliary_num_buckets <= 0:
             raise ValueError("count_auxiliary_num_buckets must be positive")
+        if not isinstance(self.mask_bet_features_for_playing, bool):
+            raise TypeError("mask_bet_features_for_playing must be bool")
+        if not isinstance(self.play_feature_mask_module_names, tuple):
+            self.play_feature_mask_module_names = tuple(self.play_feature_mask_module_names)
+        if any(not isinstance(name, str) for name in self.play_feature_mask_module_names):
+            raise TypeError("play_feature_mask_module_names must contain strings")
         if any(dim <= 0 for dim in self.feedforward_hidden_dims):
             raise ValueError("feedforward_hidden_dims must contain positive sizes")
 

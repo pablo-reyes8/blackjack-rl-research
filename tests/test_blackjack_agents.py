@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import unittest
 
 import torch
@@ -113,6 +114,44 @@ class BlackjackAgentArchitectureTests(unittest.TestCase):
         self.assertEqual(tuple(output["q_values"].shape), (1, len(ACTION_ORDER)))
         self.assertEqual(tuple(output["bet_q_values"].shape), (1, model.num_bet_actions))
         self.assertEqual(tuple(output["play_q_values"].shape), (1, model.num_play_actions))
+
+    def test_feedforward_can_mask_bet_features_for_playing(self) -> None:
+        env = self.make_env(
+            observation_profile="table_realistic_unknown_progress",
+            bet_multipliers=(1, 2, 3, 4),
+        )
+        env.load_shoe(["10", "6", "7", "10"], total_cards=4)
+        env.reset()
+        response = env.step("bet_1x")
+        response_with_larger_bet = deepcopy(response)
+        response_with_larger_bet["observation"]["current_bet"] = 4.0
+        response_with_larger_bet["observation"]["betting_context"]["current_bet"] = 4.0
+
+        model = FeedForwardDoubleDQN.from_profile(
+            "table_realistic_unknown_progress",
+            mask_bet_features_for_playing=True,
+        )
+        model.eval()
+        output = model(response)
+        larger_bet_output = model(response_with_larger_bet)
+
+        self.assertEqual(output["q_values"].shape[-1], len(ACTION_ORDER))
+        self.assertEqual(output["bet_q_values"].shape[-1], model.num_bet_actions)
+        self.assertEqual(output["play_q_values"].shape[-1], model.num_play_actions)
+        self.assertEqual(model.get_play_masked_feature_names(), ("bet", "betting_context"))
+        for name in ("bet", "betting_context"):
+            start, end = model.encoder.module_slices[name]
+            self.assertFalse(model._play_feature_keep_mask[start:end].any().item())
+        self.assertFalse(torch.allclose(output["state_vector"], larger_bet_output["state_vector"], atol=1e-5))
+        self.assertTrue(torch.allclose(output["play_state_vector"], larger_bet_output["play_state_vector"], atol=1e-5))
+        self.assertTrue(torch.allclose(output["play_q_values"], larger_bet_output["play_q_values"], atol=1e-5))
+
+    def test_recurrent_rejects_play_bet_feature_mask_until_supported(self) -> None:
+        with self.assertRaisesRegex(ValueError, "feedforward"):
+            RecurrentDoubleDQN.from_profile(
+                "table_realistic_default",
+                mask_bet_features_for_playing=True,
+            )
 
     def test_module_gating_scales_each_registered_slice_without_changing_layout(self) -> None:
         model = FeedForwardDoubleDQN.from_profile(

@@ -213,6 +213,8 @@ def _build_model(
     use_count_auxiliary_head: bool,
     count_auxiliary_hidden_dim: int,
     count_auxiliary_num_buckets: int,
+    mask_bet_features_for_playing: bool,
+    play_feature_mask_module_names: tuple[str, ...],
     model_overrides: Mapping[str, Any] | None,
 ) -> Any:
     if architecture not in MODEL_CLASS_BY_ARCHITECTURE:
@@ -237,6 +239,8 @@ def _build_model(
         use_count_auxiliary_head=use_count_auxiliary_head,
         count_auxiliary_hidden_dim=count_auxiliary_hidden_dim,
         count_auxiliary_num_buckets=count_auxiliary_num_buckets,
+        mask_bet_features_for_playing=mask_bet_features_for_playing,
+        play_feature_mask_module_names=play_feature_mask_module_names,
     )
     _apply_overrides(model_config, model_overrides)
 
@@ -380,6 +384,8 @@ def run_blackjack_transfer_stage(
     use_count_auxiliary_head: bool | None = None,
     count_auxiliary_hidden_dim: int = 128,
     count_auxiliary_num_buckets: int = 4,
+    mask_bet_features_for_playing: bool = False,
+    play_feature_mask_module_names: tuple[str, ...] = ("bet", "betting_context"),
     freeze_playing_parts: bool = False,
     use_optimizer_param_groups: bool = False,
     backbone_lr: float = 1e-5,
@@ -695,6 +701,8 @@ def run_blackjack_transfer_stage(
         use_count_auxiliary_head=resolved_use_count_auxiliary_head,
         count_auxiliary_hidden_dim=count_auxiliary_hidden_dim,
         count_auxiliary_num_buckets=count_auxiliary_num_buckets,
+        mask_bet_features_for_playing=mask_bet_features_for_playing,
+        play_feature_mask_module_names=play_feature_mask_module_names,
         model_overrides=model_overrides,
     )
 
@@ -905,6 +913,9 @@ def run_blackjack_transfer_stage(
         "count_auxiliary_min_observed_cards": count_auxiliary_config.min_observed_cards,
         "use_count_auxiliary_head": resolved_use_count_auxiliary_head,
         "count_auxiliary_hidden_dim": count_auxiliary_hidden_dim,
+        "mask_bet_features_for_playing": mask_bet_features_for_playing,
+        "play_feature_mask_module_names": play_feature_mask_module_names,
+        "play_feature_masked_modules": model.get_play_masked_feature_names(),
         "state_dim": model.state_dim,
         "use_optimizer_param_groups": use_optimizer_param_groups,
         "freeze_playing_parts": freeze_playing_parts,

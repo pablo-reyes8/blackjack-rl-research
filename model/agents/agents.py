@@ -32,9 +32,12 @@ class BaseBlackjackQNetwork(nn.Module):
         self.bet_action_slice = slice(0, self.num_bet_actions)
         self.play_action_slice = slice(self.num_bet_actions, self.num_actions)
         self.use_module_gating = bool(getattr(self.config, "use_module_gating", False))
+        self.mask_bet_features_for_playing = bool(getattr(self.config, "mask_bet_features_for_playing", False))
 
         if tuple(ACTION_ORDER) != self.bet_action_names + self.play_action_names:
             raise ValueError("ACTION_ORDER must match bet actions followed by play actions")
+        if self.mask_bet_features_for_playing and self.config.architecture != "feedforward":
+            raise ValueError("mask_bet_features_for_playing is currently supported only for feedforward architecture")
 
         self.module_gates = nn.ParameterDict(
             {
@@ -50,6 +53,33 @@ class BaseBlackjackQNetwork(nn.Module):
             start, end = self.encoder.module_slices[name]
             feature_gate_index[start:end] = gate_index
         self.register_buffer("_module_gate_feature_index", feature_gate_index, persistent=False)
+        self.register_buffer("_play_feature_keep_mask", self._build_play_feature_keep_mask(), persistent=False)
+
+    def _build_play_feature_keep_mask(self) -> torch.Tensor:
+        keep_mask = torch.ones((self.state_dim,), dtype=torch.bool)
+        if not self.mask_bet_features_for_playing:
+            return keep_mask
+
+        names = tuple(getattr(self.config, "play_feature_mask_module_names", ("bet", "betting_context")))
+        for name in names:
+            module_slice = self.encoder.module_slices.get(name)
+            if module_slice is None:
+                continue
+            start, end = module_slice
+            keep_mask[start:end] = False
+        return keep_mask
+
+    def _mask_play_features(self, state_vector: torch.Tensor) -> torch.Tensor:
+        if not self.mask_bet_features_for_playing:
+            return state_vector
+        keep_mask = self._play_feature_keep_mask.to(device=state_vector.device, dtype=state_vector.dtype)
+        return state_vector * keep_mask
+
+    def get_play_masked_feature_names(self) -> tuple[str, ...]:
+        if not self.mask_bet_features_for_playing:
+            return tuple()
+        names = getattr(self.config, "play_feature_mask_module_names", ("bet", "betting_context"))
+        return tuple(name for name in names if name in self.encoder.module_slices)
 
     def _build_count_auxiliary_head(self, feature_dim: int) -> nn.Module | None:
         if not bool(getattr(self.config, "use_count_auxiliary_head", False)):
@@ -288,10 +318,13 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
 
     def forward(self, inputs: Any) -> dict[str, Any]:
         encoded = self._prepare_feedforward_batch(inputs)
-        state_vector = self._apply_module_gating(encoded["state_vector"])
+        raw_state_vector = encoded["state_vector"]
+        state_vector = self._apply_module_gating(raw_state_vector)
+        play_state_vector = self._apply_module_gating(self._mask_play_features(raw_state_vector))
         hidden = self.backbone(state_vector)
+        play_hidden_base = self.backbone(play_state_vector) if self.mask_bet_features_for_playing else hidden
         bet_hidden = self.bet_adapter(hidden)
-        play_hidden = self.play_adapter(hidden)
+        play_hidden = self.play_adapter(play_hidden_base)
         bet_q_values = self.bet_head(bet_hidden)
         play_q_values = self.play_head(play_hidden)
         count_bucket_logits = self._maybe_forward_count_auxiliary(hidden)
@@ -304,7 +337,9 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
             "masked_q_values": masked_q_values,
             "action_mask": encoded["action_mask"],
             "state_vector": state_vector,
+            "play_state_vector": play_state_vector,
             "backbone_output": hidden,
+            "play_backbone_output": play_hidden_base,
             "module_tensors": encoded.get("module_tensors", {}),
             "metadata": {
                 "architecture": self.config.architecture,
@@ -313,6 +348,8 @@ class FeedForwardDoubleDQN(BaseBlackjackQNetwork):
                 "batch_shape": tuple(q_values.shape),
                 "bet_action_slice": (self.bet_action_slice.start, self.bet_action_slice.stop),
                 "play_action_slice": (self.play_action_slice.start, self.play_action_slice.stop),
+                "play_feature_mask": self.mask_bet_features_for_playing,
+                "play_feature_mask_module_names": self.get_play_masked_feature_names(),
                 **(encoded.get("metadata") or {}),
             },
         }
