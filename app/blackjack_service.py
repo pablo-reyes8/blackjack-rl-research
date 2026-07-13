@@ -86,6 +86,8 @@ class BlackjackAppSession:
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         self.completed_rounds = 0
         self.total_reward = 0.0
+        self.outcome_counts = {"win": 0, "loss": 0, "push": 0, "blackjack": 0, "bust": 0, "surrender": 0}
+        self.last_result: dict[str, Any] | None = None
         self.last_error: str | None = None
         self._load_runtime()
 
@@ -177,6 +179,41 @@ class BlackjackAppSession:
             "encoder_profile": getattr(getattr(self.model.config, "encoder", None), "profile", None),
         }
 
+    def _record_completed_round(self, response: Mapping[str, Any]) -> None:
+        info = response.get("info") or {}
+        public_state = info.get("public_state") or {}
+        reward = float(info.get("round_reward", 0.0))
+        settlements = [str(item) for item in info.get("hand_settlements", []) if item is not None]
+        close_reasons = [str(item) for item in info.get("hand_close_reasons", []) if item is not None]
+
+        if any(item == "blackjack" for item in settlements):
+            result = "blackjack"
+        elif any(item == "win" for item in settlements):
+            result = "win"
+        elif all(item == "push" for item in settlements) and settlements:
+            result = "push"
+        elif any(item == "surrender" for item in close_reasons):
+            result = "surrender"
+        elif any(item == "loss" for item in settlements):
+            result = "loss"
+        else:
+            result = "push" if reward == 0 else ("win" if reward > 0 else "loss")
+
+        if any(reason == "bust" for reason in close_reasons):
+            self.outcome_counts["bust"] += 1
+        if result in self.outcome_counts:
+            self.outcome_counts[result] += 1
+        self.completed_rounds += 1
+        self.total_reward += reward
+        self.last_result = {
+            "result": result,
+            "reward": reward,
+            "settlements": settlements,
+            "close_reasons": close_reasons,
+            "dealer": public_state.get("dealer", {}),
+            "player_hands": public_state.get("player_hands", []),
+        }
+
     def _ensure_response(self) -> dict[str, Any]:
         if self.response is None:
             self.response = self.env.reset()
@@ -257,6 +294,11 @@ class BlackjackAppSession:
                     "completed_rounds": self.completed_rounds,
                     "total_reward": self.total_reward,
                     "average_reward": self.total_reward / self.completed_rounds if self.completed_rounds else 0.0,
+                    "ev_per_100_hands": (
+                        100.0 * self.total_reward / self.completed_rounds if self.completed_rounds else 0.0
+                    ),
+                    "outcomes": dict(self.outcome_counts),
+                    "last_result": self.last_result,
                 },
                 "response": {
                     "reward": response.get("reward", 0.0),
@@ -284,8 +326,7 @@ class BlackjackAppSession:
             self._recommendation(response, commit_hidden=True)
             self.response = self.env.step(action)
             if bool(self.response.get("done")):
-                self.completed_rounds += 1
-                self.total_reward += float((self.response.get("info") or {}).get("round_reward", 0.0))
+                self._record_completed_round(self.response)
             return self._state_payload()
 
     def play_suggestion(self) -> dict[str, Any]:
@@ -312,8 +353,7 @@ class BlackjackAppSession:
                 self.response = self.env.step(str(action))
                 steps.append(str(action))
                 if bool(self.response.get("done")):
-                    self.completed_rounds += 1
-                    self.total_reward += float((self.response.get("info") or {}).get("round_reward", 0.0))
+                    self._record_completed_round(self.response)
                     break
             payload = self._state_payload()
             payload["autoplay"] = {"steps": steps}
@@ -333,6 +373,8 @@ class BlackjackAppSession:
             self.seed = seed if seed is not None else random.randint(1, 2_000_000_000)
             self.completed_rounds = 0
             self.total_reward = 0.0
+            self.outcome_counts = {"win": 0, "loss": 0, "push": 0, "blackjack": 0, "bust": 0, "surrender": 0}
+            self.last_result = None
             self._load_runtime()
             self.response = self.env.reset()
             return self._state_payload()

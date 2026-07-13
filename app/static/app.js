@@ -30,6 +30,13 @@ const ACTION_TEXT = {
   insurance: "Insurance",
 };
 
+const SUITS = [
+  { symbol: "♠", name: "spade", color: "black" },
+  { symbol: "♥", name: "heart", color: "red" },
+  { symbol: "♣", name: "club", color: "black" },
+  { symbol: "♦", name: "diamond", color: "red" },
+];
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -89,16 +96,28 @@ function setBusy(value) {
   document.body.classList.toggle("busy", value);
 }
 
-function cardElement(rank, hidden = false) {
+function suitFor(rank, index) {
+  const text = String(rank || "");
+  const rankScore = [...text].reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return SUITS[(rankScore + index) % SUITS.length];
+}
+
+function cardElement(rank, hidden = false, index = 0) {
   const card = document.createElement("div");
   card.className = "card";
+  card.style.animationDelay = `${Math.min(index * 70, 420)}ms`;
   if (hidden) {
     card.classList.add("hidden");
     card.textContent = "?";
     return card;
   }
-  if (["A", "10", "J", "Q", "K"].includes(rank)) card.classList.add("red");
-  card.textContent = rank || "--";
+  const suit = suitFor(rank, index);
+  card.classList.add(suit.color, suit.name);
+  card.innerHTML = `
+    <span class="corner top"><b>${rank || "--"}</b><i>${suit.symbol}</i></span>
+    <span class="pip">${suit.symbol}</span>
+    <span class="corner bottom"><b>${rank || "--"}</b><i>${suit.symbol}</i></span>
+  `;
   return card;
 }
 
@@ -111,8 +130,8 @@ function renderCards(container, cards, hiddenHole = false) {
     container.appendChild(empty);
     return;
   }
-  cards.forEach((rank) => container.appendChild(cardElement(rank)));
-  if (hiddenHole) container.appendChild(cardElement("?", true));
+  cards.forEach((rank, index) => container.appendChild(cardElement(rank, false, index)));
+  if (hiddenHole) container.appendChild(cardElement("?", true, cards.length));
 }
 
 function renderHands(publicState) {
@@ -162,6 +181,32 @@ function renderTable(payload) {
   const pct = Math.max(0, Math.min(100, Number(shoe.penetration_used || 0) * 100));
   $("shoeFill").style.width = `${pct}%`;
   $("shoeText").textContent = `${fmt(pct, 0)}%`;
+  $("discardText").textContent = `${shoe.cards_used ?? "--"} used`;
+  renderResultBanner(payload);
+}
+
+function resultText(result) {
+  const labels = {
+    win: "Ganaste",
+    blackjack: "Blackjack",
+    loss: "Perdiste",
+    push: "Push",
+    surrender: "Surrender",
+  };
+  return labels[result] || "Mano terminada";
+}
+
+function renderResultBanner(payload) {
+  const banner = $("resultBanner");
+  const last = (payload.session || {}).last_result;
+  if (!payload.response.done || !last) {
+    banner.className = "result-banner";
+    banner.textContent = "";
+    return;
+  }
+  const result = last.result || "push";
+  banner.className = `result-banner show ${result}`;
+  banner.innerHTML = `<strong>${resultText(result)}</strong><span>${fmt(last.reward, 2)}</span>`;
 }
 
 function renderActions(payload) {
@@ -271,11 +316,16 @@ function renderCount(payload) {
 function renderStats(payload) {
   const model = payload.model || {};
   const session = payload.session || {};
+  const outcomes = session.outcomes || {};
   $("modelPill").textContent = `${model.key || "--"} · ${model.architecture || "--"} · dim ${model.state_dim || "--"}`;
   $("bankroll").textContent = fmt(session.total_reward, 2);
   $("rounds").textContent = session.completed_rounds || 0;
   $("avgReward").textContent = fmt(session.average_reward, 3);
   $("seed").textContent = model.seed || "--";
+  $("wins").textContent = (outcomes.win || 0) + (outcomes.blackjack || 0);
+  $("losses").textContent = (outcomes.loss || 0) + (outcomes.surrender || 0);
+  $("pushes").textContent = outcomes.push || 0;
+  $("ev100").textContent = fmt(session.ev_per_100_hands, 2);
 }
 
 function renderHistory(payload) {

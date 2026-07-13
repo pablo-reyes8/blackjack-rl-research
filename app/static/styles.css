@@ -100,7 +100,7 @@ h1 {
   overflow: hidden;
   padding: 28px;
   display: grid;
-  grid-template-rows: 1fr auto 1fr;
+  grid-template-rows: minmax(150px, auto) 1fr minmax(190px, auto);
   gap: 20px;
   background:
     linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px),
@@ -118,6 +118,19 @@ h1 {
   pointer-events: none;
 }
 
+.felt::after {
+  content: "BLACKJACK PAYS 3 TO 2";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(255, 238, 196, 0.2);
+  font-size: clamp(1.2rem, 3vw, 2.5rem);
+  font-weight: 950;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
 .dealer-row,
 .player-row,
 .center-mark {
@@ -125,12 +138,18 @@ h1 {
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 20px;
 }
 
+.dealer-row,
 .player-row {
-  align-items: flex-end;
+  flex-direction: column;
+  text-align: center;
+}
+
+.player-row {
+  align-items: center;
 }
 
 .cards,
@@ -140,20 +159,25 @@ h1 {
   gap: 10px;
   min-height: 116px;
   align-items: center;
+  justify-content: center;
 }
 
 .card {
-  width: 76px;
-  height: 108px;
+  position: relative;
+  width: 84px;
+  height: 120px;
   border-radius: 8px;
-  background: var(--chip);
+  background:
+    radial-gradient(circle at 50% 40%, rgba(255,255,255,0.7), transparent 32%),
+    linear-gradient(145deg, #fffdf5, #efe8d8);
   color: #1d2027;
   border: 1px solid rgba(0, 0, 0, 0.28);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
-  display: grid;
-  place-items: center;
+  display: block;
   font-size: 1.45rem;
   font-weight: 900;
+  transform-origin: center bottom;
+  animation: dealCard 260ms ease both;
 }
 
 .card.hidden {
@@ -167,6 +191,43 @@ h1 {
 
 .card.red {
   color: #b82f3d;
+}
+
+.card.black {
+  color: #1d2027;
+}
+
+.corner {
+  position: absolute;
+  display: grid;
+  justify-items: center;
+  line-height: 1;
+  font-size: 1rem;
+}
+
+.corner i {
+  font-style: normal;
+  font-size: 0.92rem;
+}
+
+.corner.top {
+  top: 8px;
+  left: 8px;
+}
+
+.corner.bottom {
+  right: 8px;
+  bottom: 8px;
+  transform: rotate(180deg);
+}
+
+.pip {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 2.9rem;
+  opacity: 0.92;
 }
 
 .empty-seat {
@@ -186,6 +247,7 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
+  justify-content: center;
 }
 
 .hand {
@@ -211,6 +273,7 @@ h1 {
 .center-mark {
   justify-content: center;
   flex-wrap: wrap;
+  align-content: center;
 }
 
 .table-hint {
@@ -221,14 +284,41 @@ h1 {
   font-weight: 750;
 }
 
+.table-tools {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  display: grid;
+  gap: 10px;
+  width: min(260px, calc(100% - 36px));
+}
+
 .shoe-meter {
-  width: min(380px, 100%);
+  width: 100%;
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 10px;
   color: var(--muted);
   font-weight: 800;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.discard-tray {
+  min-height: 48px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.08), transparent),
+    rgba(0, 0, 0, 0.28);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px;
+  font-weight: 850;
 }
 
 .meter {
@@ -243,6 +333,49 @@ h1 {
   height: 100%;
   width: 0%;
   background: linear-gradient(90deg, var(--blue), var(--gold), var(--red));
+}
+
+.result-banner {
+  min-height: 72px;
+  min-width: min(420px, 100%);
+  display: none;
+  place-items: center;
+  gap: 6px;
+  padding: 12px 20px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.38);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  animation: resultPop 420ms ease both;
+}
+
+.result-banner.show {
+  display: grid;
+}
+
+.result-banner strong {
+  font-size: clamp(1.4rem, 3vw, 2.8rem);
+}
+
+.result-banner span {
+  font-weight: 900;
+}
+
+.result-banner.win,
+.result-banner.blackjack {
+  border-color: rgba(215, 175, 99, 0.8);
+  color: #ffe1a0;
+}
+
+.result-banner.loss,
+.result-banner.surrender {
+  border-color: rgba(204, 77, 77, 0.8);
+  color: #ffb6b6;
+}
+
+.result-banner.push {
+  border-color: rgba(95, 168, 211, 0.8);
+  color: #bde4ff;
 }
 
 .controls {
@@ -428,6 +561,49 @@ h1 {
   gap: 10px;
 }
 
+.score-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.score-tile {
+  min-height: 74px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 10px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.score-tile span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.score-tile strong {
+  font-size: 1.35rem;
+}
+
+.score-tile.win strong {
+  color: var(--gold);
+}
+
+.score-tile.loss strong {
+  color: #ff9d9d;
+}
+
+.score-tile.push strong {
+  color: #bde4ff;
+}
+
+.score-tile.ev strong {
+  color: #d5f7d7;
+}
+
 .stats-grid div {
   min-height: 74px;
   background: rgba(0, 0, 0, 0.18);
@@ -471,6 +647,32 @@ h1 {
   opacity: 1;
 }
 
+@keyframes dealCard {
+  from {
+    opacity: 0;
+    transform: translateY(-22px) rotate(-3deg) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes resultPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.84);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @media (max-width: 1020px) {
   .shell {
     grid-template-columns: 1fr;
@@ -493,6 +695,19 @@ h1 {
     flex-direction: column;
   }
 
+  .dealer-row,
+  .player-row {
+    align-items: center;
+  }
+
+  .table-tools {
+    position: relative;
+    top: auto;
+    right: auto;
+    width: 100%;
+    order: -1;
+  }
+
   .felt {
     padding: 18px;
   }
@@ -502,9 +717,13 @@ h1 {
   }
 
   .card {
-    width: 58px;
-    height: 82px;
+    width: 62px;
+    height: 88px;
     font-size: 1.1rem;
+  }
+
+  .pip {
+    font-size: 2rem;
   }
 
   .cards,
