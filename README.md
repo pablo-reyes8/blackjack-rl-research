@@ -482,7 +482,6 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 
 - No published benchmark table yet across standard blackjack settings or ablations
 - No benchmark against basic strategy, card-counting baselines, or simple betting heuristics yet
-- No experiment tracking backend integration (e.g. W&B)
 - No pre-trained model zoo
 - No published study yet on robustness across different table populations, shoe penetrations, and exogenous-card profiles
 
