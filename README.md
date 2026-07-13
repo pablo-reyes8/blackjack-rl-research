@@ -61,7 +61,7 @@ The stack is intentionally built from the ground up—bypassing high-level abstr
 
 ## Current status & Capabilities
 
-The core blackjack environment is fully implemented, bypassing standard abstractions to natively model the game as a two-stage decision process: **Betting** with configurable spreads such as `(1x)`, `(1x, 2x)`, `(1x, 2x, 3x)`, or `(1x, 2x, 3x, 4x)`, and **Playing** (`stand`, `hit`, `double`, `split`, `surrender`, `insurance`). 
+The core blackjack environment is fully implemented, bypassing standard abstractions to natively model the game as a two-stage decision process: **Betting** with configurable spreads such as `(1x)`, `(1x, 2x)`, `(1x, 2x, 3x)`, or `(1x, 2x, 3x, 4x)`, and **Playing** (`stand`, `hit`, `double`, `split`, `surrender`, `insurance`).
 
 The current codebase already supports iterative training workflows where the agent is first stabilized on playing behavior and then upgraded through staged transfer runs. The retained checkpoints under `outputs/models/` reflect that progression:
 
@@ -73,34 +73,37 @@ The current codebase already supports iterative training workflows where the age
 In practical terms, the agent has already learned a solid playing policy under realistic partial observability. The main active research area is no longer "can it play Blackjack at all?" but rather "how to make the betting head exploit favorable states more reliably without damaging playing quality."
 
 **📈 Current project status**
+
 - **Playing policy:** already strong and stable enough to be reused as a source policy for later stages.
 - **Training workflow:** supports curriculum-like staged runs, warm starts, resume, checkpoint comparison, and teacher-guided transfer.
 - **Betting research:** currently being improved with dedicated betting diagnostics, auxiliary betting objectives, and evaluation-by-bucket tooling.
 
 **✅ Casino-like validation snapshot**
 
-A short model comparison run under the casino-like evaluation setup confirms that the agent has converged on an exceptional playing policy. The best current checkpoint in this snapshot, `05A_count_aux_repr_1234`, reaches **-29.66 EV / 1000 decisions**. To put this empirical result into perspective, an EV of this magnitude is functionally equivalent to—and in some standard configurations, slightly outperforms—a human player executing statistically flawless Basic Strategy. 
+A short model comparison run under the casino-like evaluation setup confirms that the agent has converged on an exceptional playing policy. The best current checkpoint in this snapshot, `05A_count_aux_repr_1234`, reaches **-29.66 EV / 1000 decisions**. To put this empirical result into perspective, an EV of this magnitude is functionally equivalent to—and in some standard configurations, slightly outperforms—a human player executing statistically flawless Basic Strategy.
 
 Given the partial observability, realistic shoe dynamics, and non-trivial table rules inherent to this environment, achieving this metric confirms that the architecture has successfully internalized optimal deterministic play. Rather than just validating the core behavior, this represents a highly successful stabilization of the underlying mechanics. With this mathematically rigorous and robust baseline secured, the agent is now perfectly positioned to tackle dynamic bet sizing.
 
-| Checkpoint | EV / 1000 | Win rate | Loss rate |
-| :--- | ---: | ---: | ---: |
+| Checkpoint                  |        EV / 1000 |         Win rate |        Loss rate |
+| :-------------------------- | ---------------: | ---------------: | ---------------: |
 | `05A_count_aux_repr_1234` | **-29.66** | **43.13%** | **49.24%** |
-| `04D_weighted_ce_1234` | -37.54 | 43.07% | 49.43% |
-| `03C_playing_only_hard` | -44.18 | 42.58% | 49.87% |
-| `04G_ev_calibrated_1234` | -56.53 | 41.96% | 50.46% |
-
+| `04D_weighted_ce_1234`    |           -37.54 |           43.07% |           49.43% |
+| `03C_playing_only_hard`   |           -44.18 |           42.58% |           49.87% |
+| `04G_ev_calibrated_1234`  |           -56.53 |           41.96% |           50.46% |
 
 **🃏 Environment & Rule Engine**
+
 * **Shoe Dynamics:** Multi-deck shoes, hidden progress starts, reshuffle tracking, cut-card mode, and realistic reset-to-betting flows.
 * **Table Rules:** S17/H17, blackjack payouts, dealer peek, insurance, surrender, standard/DAS splits, and split-aces restrictions.
 * **Extensions:** Configurable max split depth, variable bet multipliers, and optional six-card charlie.
 
 **🧠 Agents & Observability**
+
 * **Architectures:** `feedforward` (fast baselines), `recurrent` (handling partial observability), and `dueling_recurrent` (advanced sequence modeling).
 * **Observation Profiles:** Ranging from `minimal_basic_strategy` (compact features), to `table_realistic` (partial visibility with or without shoe progress), up to a `fully_observable_sim` (research-only God-view for theoretical bounds).
 
 **⚡ Training Pipeline**
+
 * **Phase-Aware Optimization:** Separate betting/playing heads, optional bet-feature masking for playing, module gating, and dual epsilon exploration schedules.
 * **Loss & Replay:** Standard Double DQN targets, optional $n$-step returns, phase-weighted TD loss, temporal replay buffers, optional betting/count auxiliary losses, and conservative observed-EV ranking support.
 * **Transfer & Distillation:** Warm-start loading, teacher checkpoints, and stage-specific distillation to protect previously learned playing behavior.
@@ -182,6 +185,7 @@ blackjack-train --experiment-config configs/experiments/smoke-test.yaml
 This preset is intentionally small and is used by CI as a fast end-to-end validation run.
 
 Training output is phase-aware now. During a run the trainer prints, in a compact format:
+
 - betting epsilon and playing epsilon
 - loss and TD error split by phase
 - distillation loss and auxiliary betting loss when enabled
@@ -205,31 +209,35 @@ blackjack-evaluate \
 
 The repository ships with a small but useful preset catalog.
 
-| Preset | Main idea |
-| :--- | :--- |
-| `configs/experiments/smoke-test.yaml` | Fast CI and local sanity check |
-| `configs/experiments/feedforward-basic.yaml` | Feedforward baseline on compact observations |
-| `configs/experiments/recurrent-table-default.yaml` | GRU-based recurrent training on realistic table observations |
-| `configs/experiments/dueling-unknown-progress.yaml` | LSTM dueling recurrent agent under hidden shoe progress |
-| `configs/experiments/fully-observable-sim.yaml` | Stronger research preset using simulator-level visibility |
-| `configs/experiments/experiment.template.yaml` | Copyable template for custom experiments |
+| Preset                                                | Main idea                                                    |
+| :---------------------------------------------------- | :----------------------------------------------------------- |
+| `configs/experiments/smoke-test.yaml`               | Fast CI and local sanity check                               |
+| `configs/experiments/feedforward-basic.yaml`        | Feedforward baseline on compact observations                 |
+| `configs/experiments/recurrent-table-default.yaml`  | GRU-based recurrent training on realistic table observations |
+| `configs/experiments/dueling-unknown-progress.yaml` | LSTM dueling recurrent agent under hidden shoe progress      |
+| `configs/experiments/fully-observable-sim.yaml`     | Stronger research preset using simulator-level visibility    |
+| `configs/experiments/experiment.template.yaml`      | Copyable template for custom experiments                     |
 
 ---
 
 ## 💻 CLI workflows
 
 ### Describe a setup
+
 Use this to inspect the fully resolved environment, model, and training config before spending time on a run.
+
 ```bash
 blackjack-describe --experiment-config configs/experiments/recurrent-table-default.yaml
 ```
 
 ### Train with a preset
+
 ```bash
 blackjack-train --experiment-config configs/experiments/feedforward-basic.yaml
 ```
 
 ### Override the number of environments or the output directory
+
 ```bash
 blackjack-train \
   --experiment-config configs/experiments/recurrent-table-default.yaml \
@@ -238,6 +246,7 @@ blackjack-train \
 ```
 
 ### Dry-run a config without training
+
 ```bash
 blackjack-train \
   --experiment-config configs/experiments/dueling-unknown-progress.yaml \
@@ -246,6 +255,7 @@ blackjack-train \
 ```
 
 ### Evaluate a saved checkpoint with custom evaluation settings
+
 ```bash
 blackjack-evaluate \
   --experiment-config configs/experiments/fully-observable-sim.yaml \
@@ -256,6 +266,7 @@ blackjack-evaluate \
 ```
 
 Phase-specific evaluation override example:
+
 ```bash
 blackjack-evaluate \
   --experiment-config configs/experiments/recurrent-table-default.yaml \
@@ -294,6 +305,7 @@ print(result["checkpoint_dir"])
 ```
 
 ### Example: environment-only interaction
+
 ```python
 from enviroment_bj import BlackjackJSONWrapper
 
@@ -312,6 +324,7 @@ while not response["done"]:
 The repository includes a self-contained ablation suite under `scripts/ablations/`.
 
 All ablations inherit the current phase-aware training stack unless explicitly overridden:
+
 - separate betting and playing heads
 - dual epsilon exploration by phase
 - phase adapters and module gating enabled by default
@@ -319,6 +332,7 @@ All ablations inherit the current phase-aware training stack unless explicitly o
 - optional `n_step` support available in the config, but disabled by default in the shipped ablation suite
 
 **Design goals of this folder:**
+
 - each ablation has its own runnable CLI
 - outputs stay inside `scripts/ablations/`
 - every ablation writes checkpoints and summaries into its own `ab_*` directory
@@ -326,30 +340,35 @@ All ablations inherit the current phase-aware training stack unless explicitly o
 
 ### Ablation matrix
 
-| Ablation | Main setup |
-| :---: | :--- |
-| **`ab_1`** | Feedforward Double DQN, minimal observation profile, MSE loss, hard targets, phase-aware defaults |
+|      Ablation      | Main setup                                                                                              |
+| :----------------: | :------------------------------------------------------------------------------------------------------ |
+| **`ab_1`** | Feedforward Double DQN, minimal observation profile, MSE loss, hard targets, phase-aware defaults       |
 | **`ab_2`** | GRU recurrent Double DQN, realistic partial observation, Huber loss, hard targets, phase-aware defaults |
-| **`ab_3`** | LSTM recurrent Double DQN, same realistic partial observation, Huber loss, hard targets |
-| **`ab_4`** | Dueling GRU, realistic partial observation, AdamW, dropout, soft targets |
-| **`ab_5`** | GRU, unknown shoe progress, MSE loss, longer replay sequences, soft targets |
-| **`ab_6`** | Dueling LSTM, fully observable simulator profile, AdamW, softer exploration targets |
+| **`ab_3`** | LSTM recurrent Double DQN, same realistic partial observation, Huber loss, hard targets                 |
+| **`ab_4`** | Dueling GRU, realistic partial observation, AdamW, dropout, soft targets                                |
+| **`ab_5`** | GRU, unknown shoe progress, MSE loss, longer replay sequences, soft targets                             |
+| **`ab_6`** | Dueling LSTM, fully observable simulator profile, AdamW, softer exploration targets                     |
 
 ### Run one ablation
+
 ```bash
 python scripts/ablations/ab_1_feedforward_mse.py
 ```
+
 *(Supports runtime overrides like `--epochs 8 --num-envs 8 --device auto`)*
 
 ### Run the full ablation suite
+
 ```bash
 python scripts/ablations/run_all.py
 ```
 
 ### Compare finished ablations
+
 ```bash
 python scripts/ablations/compare.py
 ```
+
 *(By default, ranks by `ev_per_1000_hands`. Supports custom metric targeting via `--metric`)*
 
 ---
@@ -358,15 +377,16 @@ python scripts/ablations/compare.py
 
 The repository already includes exploratory notebooks under `notebooks/`.
 
-| Notebook | Typical use |
-| :--- | :--- |
-| `try_blackjack.ipynb` | Inspect environment behavior |
-| `try_encoder.ipynb` | Inspect observation encoding and state vectors |
-| `try_agents.ipynb` | Test model outputs and architecture behavior |
-| `try_training.ipynb` | Experiment with the training loop interactively |
-| `pipeline_settings.ipynb` | Explore pipeline settings and variants |
+| Notebook                    | Typical use                                     |
+| :-------------------------- | :---------------------------------------------- |
+| `try_blackjack.ipynb`     | Inspect environment behavior                    |
+| `try_encoder.ipynb`       | Inspect observation encoding and state vectors  |
+| `try_agents.ipynb`        | Test model outputs and architecture behavior    |
+| `try_training.ipynb`      | Experiment with the training loop interactively |
+| `pipeline_settings.ipynb` | Explore pipeline settings and variants          |
 
 Recommended notebook setup:
+
 ```bash
 pip install -r requirements-dev.txt
 pip install -e .
@@ -380,6 +400,7 @@ jupyter lab
 Experiment presets live in `configs/experiments/` and are YAML-based.
 
 Each experiment can define:
+
 - `metadata`: human-readable name and description
 - `run`: script-level settings such as `num_envs`
 - `start_state`: how episodes start, including hidden burned rounds
@@ -390,6 +411,7 @@ Each experiment can define:
 The config loader supports inheritance through `extends`, so presets can share a common base while overriding only what changes.
 
 Example excerpt:
+
 ```yaml
 extends: base.yaml
 
@@ -400,22 +422,24 @@ run:
   num_envs: 4
 ```
 
-
 ---
 
 ## Docker
 
 Build the image:
+
 ```bash
 docker build -t blackjack-rl .
 ```
 
 Run the default smoke training job:
+
 ```bash
 docker run --rm blackjack-rl
 ```
 
 Run a different preset by overriding the command:
+
 ```bash
 docker run --rm blackjack-rl \
   blackjack-train --experiment-config configs/experiments/feedforward-basic.yaml
@@ -426,19 +450,19 @@ docker run --rm blackjack-rl \
 ## Testing and CI
 
 Run the test suite locally:
+
 ```bash
 python -m pytest tests -q
 ```
 
 GitHub Actions is configured in `.github/workflows/ci.yml` and currently installs dependencies, runs the test suite, resolves the smoke preset, and runs a full smoke training job.
 
-
-
 ---
 
 ## Limitations and next steps
 
 **What is already strong:**
+
 - High-fidelity blackjack environment with broad rule configurability
 - Realistic partial-observation setups, including unknown shoe progress
 - Flexible encoder with modular feature blocks for hand state, rules, temporal context, observed card history, discard summary, and visible shoe-change signals
@@ -455,6 +479,7 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 - Expanded monitoring with train/validation behavior gaps, richer betting/playing diagnostics, betting Q-value summaries, and count-proxy betting analysis
 
 **What is still missing or intentionally left lightweight:**
+
 - No published benchmark table yet across standard blackjack settings or ablations
 - No benchmark against basic strategy, card-counting baselines, or simple betting heuristics yet
 - No experiment tracking backend integration (e.g. W&B)

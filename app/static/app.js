@@ -233,7 +233,7 @@ function renderActions(payload) {
       button.type = "button";
       button.className = `action-btn ${qItem && qItem.is_best ? "best" : ""} ${isLegal ? "legal" : ""}`;
       button.disabled = state.busy || !isLegal;
-      button.innerHTML = `<span>${ACTION_TEXT[name]}</span><strong>${qItem && qItem.is_best ? "AGENTE" : qItem && qItem.q !== null ? fmt(qItem.q, 1) : "--"}</strong>`;
+      button.innerHTML = `<span>${ACTION_TEXT[name]}</span><strong>${qItem && qItem.is_best ? "★" : qItem && qItem.q !== null ? fmt(qItem.q, 1) : "--"}</strong>`;
       button.addEventListener("click", () => post("/api/action", { action: name }));
       row.appendChild(button);
     });
@@ -290,7 +290,7 @@ function renderQ(payload) {
     const width = item.q === null ? 0 : Math.max(4, ((item.q - min) / span) * 100);
     const row = document.createElement("div");
     row.className = `q-row ${item.is_best ? "best" : ""} ${item.legal ? "" : "illegal"}`;
-    row.innerHTML = `<span>${item.is_best ? "AGENTE: " : ""}${item.label}</span><div class="bar"><i style="width:${width}%"></i></div><strong>${item.q === null ? "--" : fmt(item.q, 2)}</strong>`;
+    row.innerHTML = `<span>${item.label}</span><div class="bar"><i style="width:${width}%"></i></div><strong>${item.q === null ? "--" : fmt(item.q, 2)}</strong>`;
     holder.appendChild(row);
   });
 }

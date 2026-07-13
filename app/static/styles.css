@@ -256,6 +256,11 @@ h1 {
   max-height: 138px;
   overflow: auto;
   padding: 2px;
+  scrollbar-width: none;
+}
+
+.hands::-webkit-scrollbar {
+  display: none;
 }
 
 .hand {
@@ -475,6 +480,18 @@ h1 {
   color: #fff5dd;
 }
 
+.action-btn.best strong {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: var(--gold);
+  color: #17130a;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
 .action-btn.legal:not(.best) {
   border-color: rgba(95, 168, 211, 0.5);
   background: #243040;
@@ -503,6 +520,11 @@ h1 {
   display: grid;
   align-content: start;
   gap: 10px;
+  scrollbar-width: none;
+}
+
+.side-panel::-webkit-scrollbar {
+  display: none;
 }
 
 .panel-block {
@@ -577,11 +599,26 @@ h1 {
 .q-row.best {
   color: #fff0ca;
   font-weight: 900;
+  position: relative;
+  padding-left: 16px;
 }
 
 .q-row.best span,
 .q-row.best strong {
   color: var(--gold);
+}
+
+.q-row.best::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--gold);
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 3px rgba(215, 175, 99, 0.16);
 }
 
 .q-row.illegal {
@@ -659,6 +696,11 @@ h1 {
   gap: 7px;
   max-height: 150px;
   overflow: auto;
+  scrollbar-width: none;
+}
+
+.history::-webkit-scrollbar {
+  display: none;
 }
 
 .toast {
