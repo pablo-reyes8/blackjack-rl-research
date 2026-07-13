@@ -216,13 +216,13 @@ function renderActions(payload) {
   holder.innerHTML = "";
 
   const groups = [
-    { title: "Apuesta", actions: ["bet_1x", "bet_2x", "bet_3x", "bet_4x"] },
-    { title: "Jugada", actions: ["stand", "hit", "double", "split", "surrender", "insurance"] },
+    { title: "Apuesta", className: "bet-actions", actions: ["bet_1x", "bet_2x", "bet_3x", "bet_4x"] },
+    { title: "Jugada", className: "play-actions", actions: ["stand", "hit", "double", "split", "surrender", "insurance"] },
   ];
 
   groups.forEach((group) => {
     const groupNode = document.createElement("div");
-    groupNode.className = "action-group";
+    groupNode.className = `action-group ${group.className}`;
     groupNode.innerHTML = `<div class="action-group-title">${group.title}</div>`;
     const row = document.createElement("div");
     row.className = "action-row";
@@ -233,7 +233,7 @@ function renderActions(payload) {
       button.type = "button";
       button.className = `action-btn ${qItem && qItem.is_best ? "best" : ""} ${isLegal ? "legal" : ""}`;
       button.disabled = state.busy || !isLegal;
-      button.innerHTML = `<span>${ACTION_TEXT[name]}</span><strong>${qItem && qItem.q !== null ? fmt(qItem.q, 2) : "--"}</strong>`;
+      button.innerHTML = `<span>${ACTION_TEXT[name]}</span><strong>${qItem && qItem.is_best ? "AGENTE" : qItem && qItem.q !== null ? fmt(qItem.q, 1) : "--"}</strong>`;
       button.addEventListener("click", () => post("/api/action", { action: name }));
       row.appendChild(button);
     });
