@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blackjack RL Casino</title>
+    <link rel="stylesheet" href="/styles.css?v=2" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="table-zone" aria-label="Blackjack table">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Blackjack RL</p>
+            <h1>Casino Agent Table</h1>
+          </div>
+          <div class="model-pill" id="modelPill">Cargando modelo...</div>
+        </header>
+
+        <div class="felt">
+          <div class="dealer-row">
+            <div>
+              <p class="zone-label">Dealer</p>
+              <div class="cards" id="dealerCards"></div>
+            </div>
+            <div class="total-box" id="dealerTotal">Total --</div>
+          </div>
+
+          <div class="center-mark">
+            <div class="shoe-meter">
+              <span>Shoe</span>
+              <div class="meter"><i id="shoeFill"></i></div>
+              <strong id="shoeText">--</strong>
+            </div>
+            <div class="phase-chip" id="phaseChip">Betting</div>
+            <div class="table-hint" id="tableHint">Elige una apuesta para repartir cartas.</div>
+          </div>
+
+          <div class="player-row">
+            <div>
+              <p class="zone-label">Player</p>
+              <div id="playerHands" class="hands"></div>
+            </div>
+            <div class="total-box accent" id="roundReward">Reward 0.00</div>
+          </div>
+        </div>
+
+        <section class="controls">
+          <div class="action-strip" id="actionButtons"></div>
+          <div class="command-strip">
+            <button class="command primary" id="suggestedBtn" type="button">Jugar sugerida</button>
+            <button class="command" id="autoBtn" type="button">Auto mano</button>
+            <button class="command" id="autoLoopBtn" type="button">Auto continuo</button>
+            <button class="command" id="newRoundBtn" type="button">Nueva mano</button>
+            <button class="command danger" id="newTableBtn" type="button">Nueva mesa</button>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side-panel" aria-label="Agent diagnostics">
+        <section class="panel-block">
+          <div class="panel-title">
+            <span>Recomendacion</span>
+            <strong id="suggestionText">--</strong>
+          </div>
+          <div class="agent-callout" id="agentCallout">Esperando estado del agente.</div>
+          <div class="q-list" id="qList"></div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-title">
+            <span>Conteo auxiliar</span>
+            <strong id="countBest">--</strong>
+          </div>
+          <div class="count-list" id="countList"></div>
+        </section>
+
+        <section class="panel-block stats-grid">
+          <div>
+            <span>Bankroll</span>
+            <strong id="bankroll">0.00</strong>
+          </div>
+          <div>
+            <span>Rondas</span>
+            <strong id="rounds">0</strong>
+          </div>
+          <div>
+            <span>Promedio</span>
+            <strong id="avgReward">0.00</strong>
+          </div>
+          <div>
+            <span>Seed</span>
+            <strong id="seed">--</strong>
+          </div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-title">
+            <span>Historial</span>
+            <strong id="lastAction">--</strong>
+          </div>
+          <ol class="history" id="history"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js?v=2"></script>
+  </body>
+</html>
