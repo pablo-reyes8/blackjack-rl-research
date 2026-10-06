@@ -489,4 +489,4 @@ GitHub Actions is configured in `.github/workflows/ci.yml` and currently install
 
 ## License
 
-This project is released under the MIT License. See `LICENSE` for details.
+This project is released under the MIT License. 
