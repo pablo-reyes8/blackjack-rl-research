@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "blackjack-rl-research"
 version = "0.1.0"
-description = "Advanced reinforcement learning research environment and training pipeline for blackjack."
+description = "Reinforcement learning research environment and training pipeline for blackjack."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
